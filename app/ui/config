@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "clouddl.Application": {
+            "title": "多网盘下载器",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "",
+            "port": "8686",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}

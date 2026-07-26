@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# 安装前由 fnOS 调用。
+exit 0

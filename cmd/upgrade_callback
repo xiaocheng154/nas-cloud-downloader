@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# 升级完成后由 fnOS 调用。
+exit 0

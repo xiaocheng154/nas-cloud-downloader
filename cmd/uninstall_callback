@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# 卸载完成后清除首次使用引导状态；升级不会调用本脚本。
+rm -f \
+    "${TRIM_PKGVAR}/config/onboarding.json" \
+    "${TRIM_PKGVAR}/config/ui_state.json"
+exit 0

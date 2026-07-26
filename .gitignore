@@ -1,0 +1,14 @@
+.venv/
+.preview/
+.playwright-cli/
+output/
+
+__pycache__/
+*.py[cod]
+*.log
+
+*.fpk
+fnpack-*.exe
+
+.DS_Store
+Thumbs.db

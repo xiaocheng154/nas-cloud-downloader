@@ -1,0 +1,28 @@
+[
+    {
+        "stepTitle": "欢迎",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "多网盘下载器\n\n支持百度网盘和夸克网盘。\n安装后通过浏览器访问 NAS IP:8686 使用。\n\n首次使用需在浏览器F12中获取网盘Cookie并粘贴到Web界面。"
+            }
+        ]
+    },
+    {
+        "stepTitle": "下载目录",
+        "items": [
+            {
+                "type": "text",
+                "field": "download_dir",
+                "label": "下载保存目录",
+                "initValue": "/volume1/downloads",
+                "rules": [
+                    {
+                        "required": true,
+                        "message": "请输入下载目录路径"
+                    }
+                ]
+            }
+        ]
+    }
+]

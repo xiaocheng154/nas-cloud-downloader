@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# 卸载前由 fnOS 调用。
+exit 0

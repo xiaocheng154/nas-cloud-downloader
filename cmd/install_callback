@@ -1,0 +1,20 @@
+#!/bin/bash
+
+DOWNLOAD_DIR="${wizard_download_dir:-${TRIM_PKGVAR}/downloads}"
+CONFIG_DIR="${TRIM_PKGVAR}/config"
+DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"
+
+case "$DOWNLOAD_DIR" in
+/*) ;;
+*) DOWNLOAD_DIR="${TRIM_PKGVAR}/downloads" ;;
+esac
+
+mkdir -p "$CONFIG_DIR" "$DOWNLOAD_DIR"
+chmod 700 "$CONFIG_DIR"
+chmod 755 \
+    "$TRIM_APPDEST/runtime/python/bin/python" \
+    "$TRIM_APPDEST/runtime/python/bin/python3" \
+    "$TRIM_APPDEST/runtime/python/bin/python3.11"
+printf '%s\n' "$DOWNLOAD_DIR" > "$DOWNLOAD_FILE"
+chmod 600 "$DOWNLOAD_FILE"
+exit 0

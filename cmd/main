@@ -1,0 +1,114 @@
+#!/bin/bash
+
+LOG_FILE="${TRIM_PKGVAR}/service.log"
+PID_FILE="${TRIM_PKGVAR}/service.pid"
+DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"
+PYTHON_HOME="${TRIM_APPDEST}/runtime/python"
+PYTHON_BIN="${TRIM_APPDEST}/runtime/python/bin/python3"
+SERVICE_ROOT="${TRIM_APPDEST}/service"
+APP_SCRIPT="${TRIM_APPDEST}/service/src/app.py"
+VENDOR_DIR="${TRIM_APPDEST}/service/vendor"
+CONFIG_DIR="${TRIM_PKGVAR}/config"
+
+log_msg() {
+    printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"
+}
+
+check_process() {
+    [ -n "$1" ] && kill -0 "$1" 2>/dev/null
+}
+
+status_process() {
+    if [ -r "$PID_FILE" ]; then
+        pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
+        if check_process "$pid"; then
+            return 0
+        fi
+        rm -f "$PID_FILE"
+    fi
+    return 1
+}
+
+start_process() {
+    if status_process; then
+        return 0
+    fi
+
+    if [ ! -x "$PYTHON_BIN" ]; then
+        log_msg "Bundled Python is missing or not executable: $PYTHON_BIN"
+        return 1
+    fi
+
+    DOWNLOAD_DIR="${TRIM_PKGVAR}/downloads"
+    if [ -r "$DOWNLOAD_FILE" ]; then
+        configured_dir=$(head -n 1 "$DOWNLOAD_FILE" | tr -d '\r\n')
+        if [ -n "$configured_dir" ]; then
+            DOWNLOAD_DIR="$configured_dir"
+        fi
+    fi
+
+    mkdir -p "$CONFIG_DIR" "$DOWNLOAD_DIR"
+    log_msg "Starting native service on port 8686"
+    env \
+        PYTHONHOME="$PYTHON_HOME" \
+        PYTHONPATH="$VENDOR_DIR" \
+        CONFIG_DIR="$CONFIG_DIR" \
+        DOWNLOAD_DIR="$DOWNLOAD_DIR" \
+        DOWNLOAD_DIR_FILE="$DOWNLOAD_FILE" \
+        PORT="8686" \
+        "$PYTHON_BIN" "$APP_SCRIPT" >> "$LOG_FILE" 2>&1 &
+    pid=$!
+    printf '%s' "$pid" > "$PID_FILE"
+    sleep 1
+
+    if check_process "$pid"; then
+        return 0
+    fi
+    rm -f "$PID_FILE"
+    log_msg "Native service exited during startup"
+    return 1
+}
+
+stop_process() {
+    if [ ! -r "$PID_FILE" ]; then
+        return 0
+    fi
+
+    pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
+    if ! check_process "$pid"; then
+        rm -f "$PID_FILE"
+        return 0
+    fi
+
+    log_msg "Stopping native service"
+    kill -TERM "$pid" 2>/dev/null
+    count=0
+    while check_process "$pid" && [ "$count" -lt 10 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+    if check_process "$pid"; then
+        kill -KILL "$pid" 2>/dev/null
+    fi
+    rm -f "$PID_FILE"
+    return 0
+}
+
+case "$1" in
+start)
+    start_process
+    ;;
+stop)
+    stop_process
+    ;;
+status)
+    if status_process; then
+        exit 0
+    else
+        exit 3
+    fi
+    ;;
+*)
+    exit 1
+    ;;
+esac

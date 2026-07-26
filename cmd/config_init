@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# 配置变更前由 fnOS 调用。
+exit 0

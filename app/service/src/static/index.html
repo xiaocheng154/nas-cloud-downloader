@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>多网盘下载器</title>
+  <link rel="icon" href="/static/assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="startup" id="startup" aria-label="多网盘下载器正在启动">
+    <button class="startup-skip" id="skip-startup" type="button">跳过动画</button>
+    <div class="startup-center">
+      <svg class="startup-logo" viewBox="0 0 64 64" aria-hidden="true">
+        <path class="startup-cloud" d="M18 48h-3C8.9 48 4 43.1 4 37s4.9-11 11-11c.8-9 8.2-16 17.4-16 8.6 0 15.8 6.4 17 14.7C55.5 25.4 60 30.3 60 36.5 60 42.9 54.9 48 48.5 48H46"/>
+        <path class="startup-arrow" d="M28.5 27h7v15.2h7.2L32 53 21.3 42.2h7.2z"/>
+      </svg>
+      <div class="startup-wordmark">多网盘下载器</div>
+      <div class="startup-caption">安全、清晰地管理网盘云端下载</div>
+    </div>
+  </div>
+
+  <div class="guide-backdrop is-hidden" id="guide" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+    <div class="guide-dialog">
+      <div class="guide-progress" aria-label="新手引导进度">
+        <span class="is-current"></span><span></span><span></span><span></span><span></span>
+      </div>
+      <section class="guide-step is-active" data-guide-step="1">
+        <img class="guide-logo" src="/static/assets/logo.svg" alt="">
+        <p class="eyebrow">欢迎使用</p>
+        <h1 id="guide-title">多网盘下载器</h1>
+        <p class="guide-lead">在一个清晰、克制的界面中浏览百度网盘和夸克网盘，并将文件快速的下载到你的 fnOS。</p>
+      </section>
+      <section class="guide-step" data-guide-step="2">
+        <p class="eyebrow">第 2 步</p>
+        <h1>保护你的账号凭据</h1>
+        <p class="guide-lead">Cookie、BDUSS 和 STOKEN 只保存在应用配置目录，界面不会回显原文，诊断包也不会包含它们。</p>
+        <div class="guide-note">请只在可信的 NAS 和浏览器中录入凭据，并定期检查账号登录状态。</div>
+      </section>
+      <section class="guide-step" data-guide-step="3">
+        <p class="eyebrow">第 3 步</p>
+        <h1>下载保护默认开启</h1>
+        <p class="guide-lead">默认保留 50GB 磁盘空间，同时下载 5 个任务，每个文件使用 16 个标准 Range 连接。</p>
+        <div class="guide-metrics">
+          <div><strong>50GB</strong><span>保留空间</span></div>
+          <div><strong>5</strong><span>并发任务</span></div>
+          <div><strong>16</strong><span>单文件连接</span></div>
+        </div>
+      </section>
+      <section class="guide-step" data-guide-step="4">
+        <p class="eyebrow">第 4 步</p>
+        <h1>了解使用边界</h1>
+        <p class="guide-lead">本应用使用第三方非官方接口。服务策略变化可能导致登录失效、下载失败或账号受到限制，本软件只适用于学术研究，禁止商用，违者产生的一切法律责任自行承担。</p>
+        <div class="guide-note">请确保下载内容具有合法授权，并遵守相关服务协议和所在地法律法规。</div>
+      </section>
+      <section class="guide-step" data-guide-step="5">
+        <p class="eyebrow">最后一步</p>
+        <h1 id="disclaimer-title">使用与风险免责声明</h1>
+        <div class="disclaimer-copy" id="disclaimer-copy" tabindex="0"></div>
+        <label class="accept-row">
+          <input id="disclaimer-accept" type="checkbox">
+          <span>我已阅读并同意以上免责声明</span>
+        </label>
+      </section>
+      <div class="guide-actions">
+        <button class="button button-ghost is-hidden" id="guide-back" type="button">上一步</button>
+        <div class="guide-spacer"></div>
+        <button class="button button-primary" id="guide-next" type="button">继续</button>
+        <button class="button button-primary is-hidden" id="guide-finish" type="button" disabled>同意并开始使用</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="guide-backdrop is-hidden" id="baidu-guide" role="dialog" aria-modal="true" aria-labelledby="baidu-guide-title">
+    <div class="guide-dialog baidu-guide-dialog">
+      <p class="eyebrow">百度网盘首次配置</p>
+      <h1 id="baidu-guide-title">如何配置 BDUSS 和 STOKEN</h1>
+      <p class="guide-lead">这两个值属于登录凭据，只需在首次使用或凭据失效时重新获取。</p>
+      <ol class="credential-guide-steps">
+        <li><strong>登录网页版</strong><span>在电脑浏览器中登录百度网盘网页版。</span></li>
+        <li><strong>打开开发者工具</strong><span>按 F12，进入 <b>Network</b> 面板后刷新页面。</span></li>
+        <li><strong>找到 Cookie</strong><span>选择发往 pan.baidu.com 的请求，在 Request Headers 中查看 Cookie。</span></li>
+        <li><strong>分别复制</strong><span>复制 BDUSS 和 STOKEN 的值，不要包含字段名、等号和分号。</span></li>
+        <li><strong>验证并保存</strong><span>进入“设置 → 账号与凭据”，粘贴后点击“验证并保存”。</span></li>
+      </ol>
+      <div class="guide-note">不要通过聊天、截图或公开渠道发送 BDUSS、STOKEN。凭据失效后请重新登录百度网盘获取。</div>
+      <p class="guide-persistence-note">完成后以后不再自动提示；获取方法仍可在“设置 → 账号与凭据”中查看。</p>
+      <div class="guide-actions">
+        <button class="button button-ghost" id="baidu-guide-later" type="button">稍后配置</button>
+        <div class="guide-spacer"></div>
+        <button class="button button-primary" id="baidu-guide-complete" type="button">前往设置并不再提示</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-shell is-preparing" id="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="/static/assets/logo.svg" alt="" width="42" height="42">
+        <span>多网盘下载器</span>
+      </div>
+      <nav class="primary-nav" aria-label="主导航">
+        <button class="nav-item is-active" data-view="baidu" type="button" aria-label="百度网盘" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 13.7a4 4 0 1 1 1.4-7.8A4.8 4.8 0 0 1 18.8 8a3.5 3.5 0 0 1-.3 7H8.2a3.2 3.2 0 0 1 0-6.4"/></svg>
+          <span>百度网盘</span>
+          <i class="nav-dot" id="baidu-dot"></i>
+        </button>
+        <button class="nav-item" data-view="quark" type="button" aria-label="夸克网盘">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l5.5 3.2"/></svg>
+          <span>夸克网盘</span>
+          <i class="nav-dot" id="quark-dot"></i>
+        </button>
+        <button class="nav-item" data-view="downloads" type="button" aria-label="下载任务">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg>
+          <span>下载任务</span>
+          <b class="nav-count" id="download-count">0</b>
+        </button>
+      </nav>
+      <div class="nav-bottom">
+        <button class="nav-item" data-view="settings" type="button" aria-label="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.8 6L14.5 3h-4L10.2 6a7 7 0 0 0-1.7 1.1l-2.4-1-2 3.4L6.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 1.7 1.1l.3 3h4l.3-3a7 7 0 0 0 1.7-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+          <span>设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="mobile-header">
+        <div class="mobile-brand"><img src="/static/assets/logo.svg" alt="">多网盘下载器</div>
+        <button class="icon-button" id="mobile-theme" type="button" aria-label="切换主题">◐</button>
+      </header>
+
+      <section class="view is-active" id="view-baidu" data-panel="baidu">
+        <div class="page-heading provider-page-heading">
+          <div class="provider-title-block">
+            <h1>百度网盘</h1>
+            <button class="account-chip" id="baidu-account" type="button">未连接</button>
+          </div>
+          <article class="activity-card">
+            <h2>下载活动</h2>
+            <div class="activity-metrics">
+              <div><strong id="baidu-active">0</strong><span>下载中</span></div>
+              <div><strong id="baidu-completed">0</strong><span>已完成</span></div>
+              <div><strong id="baidu-total">0 B</strong><span>总下载量</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="provider-tools">
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+            <input id="baidu-search" type="search" placeholder="搜索当前目录文件" aria-label="搜索百度网盘文件">
+          </div>
+          <button class="button button-secondary" id="baidu-refresh" type="button">刷新</button>
+        </div>
+        <div class="file-toolbar breadcrumbs-toolbar">
+          <div class="breadcrumbs" id="baidu-breadcrumbs"></div>
+        </div>
+        <div class="file-surface" id="baidu-surface">
+          <table class="file-table">
+            <thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+            <tbody id="baidu-files"></tbody>
+          </table>
+          <div class="empty-state" id="baidu-empty">请先在设置中配置百度网盘凭据</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-quark" data-panel="quark">
+        <div class="page-heading provider-page-heading">
+          <div class="provider-title-block">
+            <h1>夸克网盘</h1>
+            <button class="account-chip" id="quark-account" type="button">未连接</button>
+          </div>
+          <article class="activity-card">
+            <h2>下载活动</h2>
+            <div class="activity-metrics">
+              <div><strong id="quark-active">0</strong><span>下载中</span></div>
+              <div><strong id="quark-completed">0</strong><span>已完成</span></div>
+              <div><strong id="quark-total">0 B</strong><span>总下载量</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="provider-tools">
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+            <input id="quark-search" type="search" placeholder="搜索当前目录文件" aria-label="搜索夸克网盘文件">
+          </div>
+          <button class="button button-secondary" id="quark-refresh" type="button">刷新</button>
+        </div>
+        <div class="file-toolbar breadcrumbs-toolbar">
+          <div class="breadcrumbs" id="quark-breadcrumbs"></div>
+        </div>
+        <div class="file-surface" id="quark-surface">
+          <table class="file-table">
+            <thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+            <tbody id="quark-files"></tbody>
+          </table>
+          <div class="empty-state" id="quark-empty">请先在设置中配置夸克网盘凭据</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-downloads" data-panel="downloads">
+        <div class="page-heading">
+          <div><p class="eyebrow">传输中心</p><h1>下载任务</h1></div>
+          <div class="heading-actions">
+            <button class="button button-secondary" id="clear-downloads" type="button">清理已结束</button>
+          </div>
+        </div>
+        <div class="download-directory-banner">
+          <strong>文件保存目录</strong>
+          <code id="download-directory">正在读取保存目录…</code>
+          <span>任务完成后请在 fnOS 文件管理器中打开此目录。</span>
+        </div>
+        <div class="download-list" id="download-list"></div>
+        <div class="empty-state large" id="downloads-empty">还没有下载任务</div>
+      </section>
+
+      <section class="view settings-view" id="view-settings" data-panel="settings">
+        <div class="page-heading">
+          <div><p class="eyebrow">应用偏好</p><h1>设置</h1></div>
+          <button class="icon-button desktop-theme" type="button" data-theme-toggle aria-label="切换主题">◐</button>
+        </div>
+
+        <div class="settings-tabs" role="tablist" aria-label="设置分类">
+          <button class="settings-tab is-active" id="settings-tab-credentials" data-settings-tab="credentials" role="tab" aria-selected="true" aria-controls="settings-panel-credentials" type="button">账号与凭据</button>
+          <button class="settings-tab" id="settings-tab-downloads" data-settings-tab="downloads" role="tab" aria-selected="false" aria-controls="settings-panel-downloads" tabindex="-1" type="button">下载策略</button>
+          <button class="settings-tab" id="settings-tab-diagnostics" data-settings-tab="diagnostics" role="tab" aria-selected="false" aria-controls="settings-panel-diagnostics" tabindex="-1" type="button">日志与诊断</button>
+        </div>
+
+        <form id="settings-form">
+          <article class="settings-card settings-page is-active" id="settings-panel-credentials" data-settings-panel="credentials" role="tabpanel" aria-labelledby="settings-tab-credentials">
+            <div class="settings-card-heading">
+              <div><h2>账号与凭据</h2><p>凭据保存在应用配置目录，保存后立即验证并生效。</p></div>
+            </div>
+            <div class="credential-grid">
+              <section class="credential-panel">
+                <div class="credential-title"><h3>百度网盘</h3><span id="baidu-credential-state">未配置</span></div>
+                <label class="field"><span>完整 Cookie</span><textarea name="baidu_cookie" autocomplete="off" spellcheck="false" placeholder="粘贴百度网盘完整 Cookie，自动提取并只保存 BDUSS、STOKEN"></textarea><small id="baidu-cookie-detection">输入后会自动识别，其他 Cookie 字段不会保存。</small></label>
+                <details class="credential-help">
+                  <summary>如何获取百度凭据</summary>
+                  <ol>
+                    <li>在电脑浏览器登录百度网盘网页版。</li>
+                    <li>按 <kbd>F12</kbd> 打开开发者工具，进入 <strong>Network</strong>，然后刷新页面。</li>
+                    <li>选择发送到百度网盘域名的请求，在 <strong>Request Headers</strong> 中找到完整 Cookie。</li>
+                    <li>复制完整 Cookie 并粘贴到上方输入框，应用会自动提取并只保存 <code>BDUSS</code>、<code>STOKEN</code>。</li>
+                  </ol>
+                </details>
+                <div class="inline-actions">
+                  <button class="button button-secondary" id="save-baidu-credential" type="button">验证并保存</button>
+                  <button class="button button-text danger" id="clear-baidu-credential" type="button">清除</button>
+                </div>
+              </section>
+              <section class="credential-panel">
+                <div class="credential-title"><h3>夸克网盘</h3><span id="quark-credential-state">未配置</span></div>
+                <label class="field"><span>完整 Cookie</span><textarea name="quark_cookie" autocomplete="off" spellcheck="false" placeholder="粘贴夸克完整 Cookie，将自动清理后保存"></textarea><small id="quark-cookie-detection">自动去除 Cookie: 前缀、换行、空项、格式错误项和重复字段；保留其他有效字段。</small></label>
+                <details class="credential-help">
+                  <summary>如何获取夸克 Cookie</summary>
+                  <ol>
+                    <li>在电脑浏览器登录夸克网盘网页版 <code>pan.quark.cn</code>。</li>
+                    <li>按 <kbd>F12</kbd> 打开开发者工具，进入 <strong>Network</strong>，然后刷新页面。</li>
+                    <li>选择发送到 <code>pan.quark.cn</code> 或 <code>drive-pc.quark.cn</code> 的请求。</li>
+                    <li>在 <strong>Request Headers</strong> 中复制完整 Cookie 值。</li>
+                    <li>可以直接粘贴带 <code>Cookie:</code> 开头的内容，输入框会自动清理。</li>
+                  </ol>
+                </details>
+                <div class="inline-actions">
+                  <button class="button button-secondary" id="save-quark-credential" type="button">验证并保存</button>
+                  <button class="button button-text danger" id="clear-quark-credential" type="button">清除</button>
+                </div>
+              </section>
+            </div>
+            <p class="credential-warning">Cookie、BDUSS 和 STOKEN 等同于登录凭据，请勿通过聊天、截图或公开渠道发送。若已经泄露，请立即退出账号会话并重新登录。</p>
+          </article>
+
+          <article class="settings-card settings-page" id="settings-panel-downloads" data-settings-panel="downloads" role="tabpanel" aria-labelledby="settings-tab-downloads" hidden>
+            <div class="settings-card-heading"><div><h2>下载策略</h2><p>设置保存后立即作用于后续下载任务。</p></div></div>
+            <div class="settings-grid">
+              <label class="field field-wide">
+                <span>下载保存目录</span>
+                <input name="download_dir" type="text" required autocomplete="off" placeholder="/vol1/1000/Downloads">
+                <small>请输入 fnOS 中已授权的绝对路径。保存后立即用于新任务，进行中的任务仍保存在原目录。</small>
+              </label>
+              <label class="field field-wide">
+                <span>同名文件</span>
+                <select name="duplicate_policy">
+                  <option value="error">无法确认相同则报错（默认）</option>
+                  <option value="rename">自动重命名</option>
+                  <option value="overwrite">覆盖本地文件</option>
+                  <option value="skip">直接跳过</option>
+                </select>
+                <small>若能确认内容相同则直接完成；否则按选定策略处理。</small>
+              </label>
+              <label class="field">
+                <span>磁盘保留空间（GB）</span>
+                <input name="reserve_space_gb" type="number" min="0" step="1" value="50">
+                <small>可用空间低于“文件剩余大小＋保留空间”时自动暂停。</small>
+              </label>
+              <label class="field">
+                <span>总下载限速（MB/s）</span>
+                <input name="total_speed_limit_mbps" type="number" min="0" step="0.1" value="0">
+                <small>所有并发任务共享；0 表示不限速。0.1 MB/s 约等于 102 KB/s。</small>
+              </label>
+              <label class="field">
+                <span>单文件连接数</span>
+                <input name="connections_per_file" type="number" min="1" max="64" step="1" value="16">
+                <small>使用标准 Range 分片下载，可设置 1–64 条连接。</small>
+              </label>
+              <label class="field">
+                <span>分片大小（MB）</span>
+                <input name="segment_size_mb" type="number" min="1" max="50" step="1" value="5">
+                <small>小文件会自动降至 1MB，大于 1GB 的文件至少使用 10MB。</small>
+              </label>
+              <label class="field">
+                <span>全局分片请求上限</span>
+                <input name="max_segment_requests" type="number" min="1" max="200" step="1" value="30">
+                <small>所有任务共享，避免瞬间建立过多连接。</small>
+              </label>
+              <label class="field">
+                <span>下载并发数</span>
+                <input name="concurrent_downloads" type="number" min="1" max="50" step="1" value="5">
+                <small>同时下载的任务数量，调整后无需重启。</small>
+              </label>
+              <div class="field field-wide schedule-field">
+                <label class="switch-row">
+                  <span><strong>仅在指定时段下载</strong><small>支持跨午夜；开始与结束相同表示全天。</small></span>
+                  <input name="schedule_enabled" type="checkbox" role="switch">
+                </label>
+                <div class="time-range">
+                  <label><span>开始</span><input name="schedule_start" type="time" value="00:00"></label>
+                  <i>至</i>
+                  <label><span>结束</span><input name="schedule_end" type="time" value="00:00"></label>
+                </div>
+              </div>
+              <div class="field field-wide section-divider">
+                <span><strong>Aria2 集成（可选）</strong></span>
+                <small>启用后优先使用外部 Aria2 RPC；应用商城没有 Aria2 也不影响内置下载器，保持关闭即可。</small>
+              </div>
+              <label class="field">
+                <span>启用 Aria2</span>
+                <input name="aria2_enabled" type="checkbox" role="switch">
+                <small>需要 NAS 上已安装 Aria2 并开启 RPC 服务。</small>
+              </label>
+              <label class="field">
+                <span>RPC 地址</span>
+                <input name="aria2_rpc_url" type="text" placeholder="本机 Aria2 RPC 地址">
+                <small>默认使用本机 127.0.0.1:6800 的 JSON-RPC 端点。</small>
+              </label>
+              <label class="field">
+                <span>RPC 密钥</span>
+                <input name="aria2_secret" type="password" autocomplete="new-password" placeholder="留空表示不修改">
+                <small>密钥只写入配置目录，页面和接口不会回显。</small>
+              </label>
+              <label class="field">
+                <span>百度 app_id</span>
+                <input name="baidu_app_id" type="number" min="1" max="999999" value="250528">
+                <small>仅在确认服务兼容时调整。</small>
+              </label>
+            </div>
+          </article>
+
+          <article class="settings-card settings-page" id="settings-panel-diagnostics" data-settings-panel="diagnostics" role="tabpanel" aria-labelledby="settings-tab-diagnostics" hidden>
+            <div class="settings-card-heading"><div><h2>日志与诊断</h2><p>查看运行日志、检查环境并导出脱敏诊断包。</p></div></div>
+            <div class="settings-grid compact">
+              <label class="field"><span>日志级别</span><select name="log_level"><option>ERROR</option><option>WARNING</option><option selected>INFO</option><option>DEBUG</option></select></label>
+              <label class="field"><span>保留天数</span><input name="log_retention_days" type="number" min="1" max="365" value="7"></label>
+              <label class="field"><span>单文件上限（MB）</span><input name="log_max_size_mb" type="number" min="1" max="1024" value="10"></label>
+            </div>
+            <div class="diagnostic-actions">
+              <button class="button button-secondary" id="refresh-logs" type="button">查看实时日志</button>
+              <button class="button button-secondary" id="download-logs" type="button">下载日志</button>
+              <button class="button button-secondary" id="clear-logs" type="button">清空日志</button>
+              <button class="button button-secondary" id="run-diagnostics" type="button">一键诊断</button>
+              <button class="button button-secondary" id="export-diagnostics" type="button">导出诊断包</button>
+            </div>
+            <pre class="log-viewer" id="log-viewer">点击“查看实时日志”读取日志。</pre>
+            <div class="diagnostic-results" id="diagnostic-results"></div>
+            <div class="contact-card">
+              <div><strong>联系与 Bug 反馈</strong><span>反馈时建议附上脱敏诊断包、问题时间和复现步骤。</span></div>
+              <a class="button button-secondary" href="mailto:2556574539@qq.com">2556574539@qq.com</a>
+            </div>
+          </article>
+          <div class="settings-footer">
+            <button class="button button-ghost" id="cancel-settings" type="button">取消</button>
+            <button class="button button-primary" type="submit">保存</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-region" id="toast-region" aria-live="polite"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

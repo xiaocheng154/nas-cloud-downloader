@@ -1,0 +1,719 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+import uvicorn
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+)
+from fastapi.staticfiles import StaticFiles
+
+from aria2_rpc import Aria2Client
+from baidu import BAIDU_PCS_USER_AGENT, BaiduPanClient
+from config_store import (
+    CredentialStore,
+    SettingsStore,
+    SettingsValidationError,
+)
+from credential_parser import extract_baidu_credentials, normalize_cookie
+from diagnostics import (
+    build_diagnostic_zip,
+    clear_logs,
+    configure_logging,
+    run_diagnostics,
+    tail_log,
+)
+from downloader import DownloadManager
+from onboarding import BaiduGuideStore, OnboardingStore
+from quark import QuarkPanClient
+
+
+APP_VERSION = "1.4.7"
+STARTED_AT = time.time()
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
+DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
+DOWNLOAD_DIR_FILE = Path(
+    os.environ.get("DOWNLOAD_DIR_FILE", str(CONFIG_DIR.parent / "download_dir"))
+)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+settings_store = SettingsStore(CONFIG_DIR)
+credential_store = CredentialStore(CONFIG_DIR)
+onboarding_store = OnboardingStore(CONFIG_DIR)
+baidu_guide_store = BaiduGuideStore(CONFIG_DIR)
+logger = configure_logging(settings_store.load(), CONFIG_DIR)
+aria2_client = Aria2Client()
+
+
+def _sync_aria2_settings():
+    settings = settings_store.load()
+    aria2_client.url = settings.aria2_rpc_url or "http://127.0.0.1:6800/jsonrpc"
+    aria2_client.secret = settings.aria2_secret or ""
+
+
+dl_manager = DownloadManager(
+    download_dir=DOWNLOAD_DIR,
+    settings_store=settings_store,
+    aria2_client=aria2_client,
+)
+clients_lock = asyncio.Lock()
+
+
+def _new_baidu_client() -> BaiduPanClient:
+    credentials = credential_store.get("baidu")
+    settings = settings_store.load()
+    return BaiduPanClient(
+        bduss=credentials.get("bduss", ""),
+        stoken=credentials.get("stoken", ""),
+        app_id=settings.baidu_app_id,
+    )
+
+
+def _new_quark_client() -> QuarkPanClient:
+    credentials = credential_store.get("quark")
+    return QuarkPanClient(cookie=credentials.get("cookie", ""))
+
+
+def _baidu_download_headers() -> dict[str, str]:
+    return {
+        "User-Agent": BAIDU_PCS_USER_AGENT,
+        "Cookie": f"BDUSS={baidu_client.bduss};",
+        "Connection": "Keep-Alive",
+    }
+
+
+def _quark_download_headers() -> dict[str, str]:
+    return quark_client.download_headers()
+
+
+def _folder_relative_dir(root_name: str, relative_dir: str) -> str:
+    return f"{root_name}/{relative_dir}" if relative_dir else root_name
+
+
+baidu_client = _new_baidu_client()
+quark_client = _new_quark_client()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger.info("多网盘下载器 %s started", APP_VERSION)
+    try:
+        yield
+    finally:
+        await aria2_client.close()
+        await baidu_client.close()
+        await quark_client.close()
+        logger.info("多网盘下载器 stopped")
+        for handler in list(logger.handlers):
+            handler.flush()
+            handler.close()
+            logger.removeHandler(handler)
+
+
+app = FastAPI(
+    title="多网盘下载器",
+    version=APP_VERSION,
+    lifespan=lifespan,
+)
+
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.middleware("http")
+async def require_disclaimer(request: Request, call_next):
+    path = request.url.path
+    is_business_api = path.startswith("/api/") and not path.startswith(
+        "/api/onboarding/"
+    )
+    if is_business_api and onboarding_store.status()["required"]:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "必须先完成新手引导并同意当前免责声明",
+                "code": "DISCLAIMER_REQUIRED",
+            },
+        )
+    return await call_next(request)
+
+
+@app.get("/api/onboarding/status")
+async def onboarding_status():
+    return onboarding_store.status()
+
+
+@app.post("/api/onboarding/accept")
+async def onboarding_accept(data: dict[str, Any] = Body(...)):
+    try:
+        return onboarding_store.accept(
+            str(data.get("version", "")),
+            data.get("accepted") is True,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/guides/baidu/status")
+async def baidu_guide_status():
+    return baidu_guide_store.status()
+
+
+@app.post("/api/guides/baidu/complete")
+async def baidu_guide_complete():
+    return baidu_guide_store.complete()
+
+
+@app.get("/api/settings")
+async def get_settings():
+    return _public_settings()
+
+
+def _public_settings() -> dict[str, Any]:
+    settings = settings_store.load()
+    result = settings.to_dict()
+    result["download_dir"] = str(dl_manager.download_dir)
+    result["aria2_secret"] = ""
+    result["aria2_secret_configured"] = bool(settings.aria2_secret)
+    return result
+
+
+def _prepare_download_dir(raw_value: Any) -> Path:
+    value = str(raw_value).strip()
+    if not value:
+        raise SettingsValidationError("下载目录不能为空")
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        raise SettingsValidationError("下载目录必须是绝对路径")
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=".clouddl-write-test-",
+            dir=candidate,
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise SettingsValidationError(f"下载目录不可写：{exc}") from exc
+    return candidate.resolve()
+
+
+def _persist_download_dir(download_dir: Path) -> None:
+    DOWNLOAD_DIR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{DOWNLOAD_DIR_FILE.name}.",
+        suffix=".tmp",
+        dir=DOWNLOAD_DIR_FILE.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(f"{download_dir}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(temporary_path, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary_path, DOWNLOAD_DIR_FILE)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+@app.put("/api/settings")
+async def update_settings(data: dict[str, Any] = Body(...)):
+    changes = dict(data)
+    requested_download_dir = changes.pop("download_dir", None)
+    if changes.get("aria2_secret") == "":
+        changes.pop("aria2_secret")
+    try:
+        prepared_download_dir = (
+            _prepare_download_dir(requested_download_dir)
+            if requested_download_dir is not None
+            else None
+        )
+        settings = settings_store.update(changes)
+        if prepared_download_dir is not None:
+            _persist_download_dir(prepared_download_dir)
+            dl_manager.download_dir = prepared_download_dir
+    except SettingsValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f"保存下载目录失败：{exc}") from exc
+    global logger
+    logger = configure_logging(settings, CONFIG_DIR)
+    _sync_aria2_settings()
+    baidu_client.app_id = settings.baidu_app_id
+    logger.info("Settings updated")
+    return _public_settings()
+
+
+@app.get("/api/credentials")
+async def credential_status():
+    return credential_store.status()
+
+
+async def _replace_baidu(credentials: dict[str, Any], persist: bool) -> dict[str, Any]:
+    cleaned = (
+        extract_baidu_credentials(str(credentials.get("cookie", "")))
+        if "cookie" in credentials
+        else {
+            "bduss": str(credentials.get("bduss", "")).strip(),
+            "stoken": str(credentials.get("stoken", "")).strip(),
+        }
+    )
+    candidate = BaiduPanClient(
+        bduss=cleaned["bduss"],
+        stoken=cleaned["stoken"],
+    )
+    result = await candidate.verify_login()
+    if not result.get("success"):
+        await candidate.close()
+        raise HTTPException(400, result.get("error", "百度凭据验证失败"))
+    global baidu_client
+    async with clients_lock:
+        previous = baidu_client
+        baidu_client = candidate
+        if persist:
+            try:
+                credential_store.update("baidu", cleaned)
+            except SettingsValidationError as exc:
+                baidu_client = previous
+                await candidate.close()
+                raise HTTPException(422, str(exc)) from exc
+        await previous.close()
+    logger.info("Baidu credentials updated")
+    return result
+
+
+async def _replace_quark(credentials: dict[str, Any], persist: bool) -> dict[str, Any]:
+    cleaned = {"cookie": normalize_cookie(str(credentials.get("cookie", "")))}
+    candidate = QuarkPanClient(cookie=cleaned["cookie"])
+    result = await candidate.verify_login()
+    if not result.get("success"):
+        await candidate.close()
+        raise HTTPException(400, result.get("error", "夸克凭据验证失败"))
+    global quark_client
+    async with clients_lock:
+        previous = quark_client
+        quark_client = candidate
+        if persist:
+            try:
+                credential_store.update("quark", cleaned)
+            except SettingsValidationError as exc:
+                quark_client = previous
+                await candidate.close()
+                raise HTTPException(422, str(exc)) from exc
+        await previous.close()
+    logger.info("Quark credentials updated")
+    return result
+
+
+@app.put("/api/credentials/{provider}")
+async def update_credentials(
+    provider: str,
+    data: dict[str, Any] = Body(...),
+):
+    if provider == "baidu":
+        result = await _replace_baidu(data, persist=True)
+    elif provider == "quark":
+        result = await _replace_quark(data, persist=True)
+    else:
+        raise HTTPException(404, "不支持的网盘类型")
+    return {
+        **credential_store.status(),
+        "verified_username": result.get("username", ""),
+    }
+
+
+@app.delete("/api/credentials/{provider}")
+async def clear_credentials(provider: str):
+    try:
+        credential_store.clear(provider)
+    except SettingsValidationError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    global baidu_client, quark_client
+    async with clients_lock:
+        if provider == "baidu":
+            await baidu_client.close()
+            baidu_client = BaiduPanClient()
+        else:
+            await quark_client.close()
+            quark_client = QuarkPanClient()
+    logger.info("%s credentials cleared", provider)
+    return credential_store.status()
+
+
+@app.post("/api/baidu/login")
+async def baidu_login(data: dict[str, Any] = Body(...)):
+    return await _replace_baidu(data, persist=True)
+
+
+@app.get("/api/baidu/list")
+async def baidu_list(
+    path: str = Query("/"),
+    page: int = Query(1),
+    page_size: int = Query(100),
+):
+    result = await baidu_client.list_files(
+        path=path,
+        page=page,
+        page_size=page_size,
+    )
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "未知错误"))
+    return result
+
+
+@app.post("/api/baidu/download/{fs_id}")
+async def baidu_download(fs_id: int, path: str = Query("")):
+    remote_path = path.strip()
+    if not remote_path.startswith("/"):
+        raise HTTPException(422, "百度文件路径无效")
+    link_result = await baidu_client.get_download_links(
+        [fs_id],
+        paths=[remote_path],
+    )
+    if not link_result.get("success"):
+        raise HTTPException(400, link_result.get("error", "获取下载链接失败"))
+    item = link_result["items"][0]
+    task_id = await dl_manager.start_download(
+        url=item["url"],
+        filename=item["name"],
+        expected_size=item.get("size"),
+        remote_hash=item.get("md5") or item.get("sha256"),
+        headers=_baidu_download_headers(),
+        baidu_app_id_used=link_result.get("app_id_used"),
+    )
+    return {
+        "success": True,
+        "task_id": task_id,
+        "filename": item["name"],
+        "size": item.get("size", 0),
+    }
+
+
+@app.post("/api/baidu/download-folder")
+async def baidu_download_folder(data: dict[str, Any] = Body(...)):
+    root_path = str(data.get("path", "")).strip()
+    root_name = str(data.get("name", "")).strip()
+    if not root_path or not root_name:
+        raise HTTPException(422, "百度文件夹路径和名称不能为空")
+    walked = await baidu_client.walk_folder(root_path)
+    if not walked.get("success"):
+        raise HTTPException(400, walked.get("error", "读取百度文件夹失败"))
+    task_ids: list[str] = []
+    failures: list[str] = []
+    for file in walked.get("files", []):
+        link_result = await baidu_client.get_download_links(
+            [file.get("fs_id")],
+            paths=[str(file.get("path", ""))],
+        )
+        if not link_result.get("success") or not link_result.get("items"):
+            link_error = str(link_result.get("error", ""))
+            if (
+                "授权签名失效" in link_error
+                or "无法获取百度账号 UID" in link_error
+            ):
+                raise HTTPException(400, link_error)
+            failures.append(str(file.get("name", "未知文件")))
+            continue
+        item = link_result["items"][0]
+        task_ids.append(
+            await dl_manager.start_download(
+                url=item["url"],
+                filename=item.get("name") or file.get("name", "download"),
+                expected_size=item.get("size") or file.get("size"),
+                remote_hash=item.get("md5") or item.get("sha256"),
+                headers=_baidu_download_headers(),
+                relative_dir=_folder_relative_dir(
+                    root_name,
+                    str(file.get("relative_dir", "")),
+                ),
+                baidu_app_id_used=link_result.get("app_id_used"),
+            )
+        )
+    if not task_ids and failures:
+        raise HTTPException(400, "文件夹中的文件均未能获取下载链接")
+    return {
+        "success": True,
+        "task_ids": task_ids,
+        "task_count": len(task_ids),
+        "failed_count": len(failures),
+    }
+
+
+@app.get("/api/aria2/status")
+async def aria2_status():
+    _sync_aria2_settings()
+    online = await aria2_client.check_connection()
+    return {
+        "configured": aria2_client.is_configured,
+        "online": online,
+        "url": aria2_client.url,
+    }
+
+
+@app.get("/api/baidu/search")
+async def baidu_search(
+    keyword: str = Query(...),
+    path: str = Query("/"),
+    page: int = Query(1),
+):
+    result = await baidu_client.search_files(
+        keyword=keyword,
+        path=path,
+        page=page,
+    )
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "搜索失败"))
+    return result
+
+
+@app.get("/api/baidu/status")
+async def baidu_status():
+    configured = credential_store.status()["baidu"]["configured"]
+    verification: dict[str, Any] = {}
+    if configured and not baidu_client._logged_in:
+        verification = await baidu_client.verify_login()
+    return {
+        "logged_in": bool(
+            baidu_client._logged_in or verification.get("success")
+        ),
+        "username": (
+            baidu_client._username or verification.get("username", "")
+        ),
+        "configured": configured,
+    }
+
+
+@app.post("/api/quark/login")
+async def quark_login(data: dict[str, Any] = Body(...)):
+    return await _replace_quark(data, persist=True)
+
+
+@app.get("/api/quark/list")
+async def quark_list(
+    path: str = Query("/"),
+    page: int = Query(1),
+    page_size: int = Query(100),
+):
+    result = await quark_client.list_files(
+        path=path,
+        page=page,
+        page_size=page_size,
+    )
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "未知错误"))
+    return result
+
+
+@app.post("/api/quark/download/{fid}")
+async def quark_download(fid: str):
+    link_result = await quark_client.get_download_url(fid)
+    if not link_result.get("success"):
+        raise HTTPException(400, link_result.get("error", "获取下载链接失败"))
+    task_id = await dl_manager.start_download(
+        url=link_result["url"],
+        filename=link_result["name"],
+        expected_size=link_result.get("size"),
+        remote_hash=link_result.get("md5") or link_result.get("sha256"),
+        headers=link_result.get("headers") or _quark_download_headers(),
+        source_profile=(
+            f"quark-{link_result.get('client_profile', 'web')}"
+        ),
+    )
+    return {
+        "success": True,
+        "task_id": task_id,
+        "filename": link_result["name"],
+        "size": link_result.get("size", 0),
+    }
+
+
+@app.post("/api/quark/download-folder")
+async def quark_download_folder(data: dict[str, Any] = Body(...)):
+    root_fid = str(data.get("fid", "")).strip()
+    root_name = str(data.get("name", "")).strip()
+    if not root_fid or not root_name:
+        raise HTTPException(422, "夸克文件夹 ID 和名称不能为空")
+    walked = await quark_client.walk_folder(root_fid)
+    if not walked.get("success"):
+        raise HTTPException(400, walked.get("error", "读取夸克文件夹失败"))
+    task_ids: list[str] = []
+    failures: list[str] = []
+    for file in walked.get("files", []):
+        link_result = await quark_client.get_download_url(
+            str(file.get("fid", ""))
+        )
+        if not link_result.get("success"):
+            failures.append(str(file.get("name", "未知文件")))
+            continue
+        task_ids.append(
+            await dl_manager.start_download(
+                url=link_result["url"],
+                filename=(
+                    link_result.get("name")
+                    or file.get("name", "download")
+                ),
+                expected_size=(
+                    link_result.get("size")
+                    or file.get("size")
+                ),
+                remote_hash=(
+                    link_result.get("md5")
+                    or link_result.get("sha256")
+                ),
+                headers=(
+                    link_result.get("headers")
+                    or _quark_download_headers()
+                ),
+                source_profile=(
+                    f"quark-{link_result.get('client_profile', 'web')}"
+                ),
+                relative_dir=_folder_relative_dir(
+                    root_name,
+                    str(file.get("relative_dir", "")),
+                ),
+            )
+        )
+    if not task_ids and failures:
+        raise HTTPException(400, "文件夹中的文件均未能获取下载链接")
+    return {
+        "success": True,
+        "task_ids": task_ids,
+        "task_count": len(task_ids),
+        "failed_count": len(failures),
+    }
+
+
+@app.get("/api/quark/search")
+async def quark_search(
+    keyword: str = Query(...),
+    page: int = Query(1),
+):
+    result = await quark_client.search_files(keyword=keyword, page=page)
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "搜索失败"))
+    return result
+
+
+@app.get("/api/quark/status")
+async def quark_status():
+    configured = credential_store.status()["quark"]["configured"]
+    verification: dict[str, Any] = {}
+    if configured and not quark_client._logged_in:
+        verification = await quark_client.verify_login()
+    return {
+        "logged_in": bool(
+            quark_client._logged_in or verification.get("success")
+        ),
+        "username": (
+            quark_client._username or verification.get("username", "")
+        ),
+        "configured": configured,
+    }
+
+
+@app.get("/api/downloads")
+async def list_downloads():
+    return {
+        "tasks": dl_manager.list_tasks(),
+        "download_directory": str(dl_manager.download_dir),
+    }
+
+
+@app.get("/api/downloads/{task_id}")
+async def download_status(task_id: str):
+    return dl_manager.get_status(task_id)
+
+
+@app.delete("/api/downloads/{task_id}")
+async def cancel_download(task_id: str):
+    return {"success": dl_manager.cancel_download(task_id)}
+
+
+@app.post("/api/downloads/clear")
+async def clear_completed():
+    dl_manager.clear_completed()
+    return {"success": True}
+
+
+@app.get("/api/logs")
+async def get_logs(lines: int = Query(200, ge=1, le=5000)):
+    return {"content": tail_log(CONFIG_DIR, lines=lines)}
+
+
+@app.get("/api/logs/download")
+async def download_logs():
+    return PlainTextResponse(
+        tail_log(CONFIG_DIR, lines=5000),
+        headers={
+            "Content-Disposition": 'attachment; filename="clouddl.log"',
+        },
+    )
+
+
+@app.delete("/api/logs")
+async def delete_logs():
+    clear_logs(CONFIG_DIR)
+    global logger
+    logger = configure_logging(settings_store.load(), CONFIG_DIR)
+    logger.info("Logs cleared")
+    return {"success": True}
+
+
+@app.post("/api/diagnostics")
+async def diagnostics():
+    return await asyncio.to_thread(
+        run_diagnostics,
+        CONFIG_DIR,
+        dl_manager.download_dir,
+    )
+
+
+@app.get("/api/diagnostics/export")
+async def export_diagnostics():
+    results = await asyncio.to_thread(
+        run_diagnostics,
+        CONFIG_DIR,
+        dl_manager.download_dir,
+    )
+    content = build_diagnostic_zip(
+        config_dir=CONFIG_DIR,
+        settings=settings_store.load(),
+        diagnostics=results,
+        version=APP_VERSION,
+        uptime_seconds=time.time() - STARTED_AT,
+    )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="clouddl-diagnostics.zip"'
+            )
+        },
+    )
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return (static_dir / "index.html").read_text(encoding="utf-8")
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8686"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

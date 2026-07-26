@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="多网盘下载器">
+  <path d="M18 48h-3C8.9 48 4 43.1 4 37s4.9-11 11-11c.8-9 8.2-16 17.4-16 8.6 0 15.8 6.4 17 14.7C55.5 25.4 60 30.3 60 36.5 60 42.9 54.9 48 48.5 48H46" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M28.5 27h7v15.2h7.2L32 53 21.3 42.2h7.2z" fill="#3568D4"/>
+</svg>
