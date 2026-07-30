@@ -1,13 +1,14 @@
 # NAS 多网盘下载器
 
-多网盘下载器是面向飞牛 fnOS 的原生第三方云盘下载工具。它把百度网盘和夸克网盘的目录浏览、文件搜索、下载任务、速度控制、磁盘保护与运行诊断集中在同一个本地 Web UI 中，并将文件直接保存到安装向导选择的 NAS 目录。应用自带 Linux x86_64 Python 运行时和全部程序依赖，不调用 Docker，不拉取容器镜像，也不会在安装阶段在线编译环境。
+多网盘下载器是面向飞牛 fnOS 的原生第三方云盘下载工具。它把百度网盘和夸克网盘的目录浏览、文件搜索、下载任务、速度控制、磁盘保护与运行诊断集中在同一个本地 Web UI 中，并将文件直接保存到安装向导选择的 NAS 目录。应用自带对应 CPU 架构的 Linux Python 运行时和全部程序依赖，不调用 Docker，不拉取容器镜像，也不会在安装阶段在线编译环境。
 
 当前安装包目标：
 
-- CPU：x86 / amd64
-- 已核对系统：fnOS 1.1.3107
+- CPU：x86_64 / amd64 或 ARM64 / aarch64
+- 已核对系统：x86_64 fnOS 1.1.3107；ARM64 包已完成静态架构与安装包测试
 - Web 端口：8686
-- 安装包：`clouddl_x86.fpk`
+- x86_64 安装包：`clouddl_x86.fpk`
+- ARM64 安装包：`clouddl_arm64.fpk`
 - 运行方式：fnOS 原生后台服务，无需 Docker
 
 ## 主要功能
@@ -42,13 +43,13 @@
 
 前提：
 
-- x86 / amd64 飞牛 NAS
+- x86_64 / amd64 或 ARM64 / aarch64 飞牛 NAS
 - fnOS 1.1.3107 或兼容版本
 
 步骤：
 
 1. 在 fnOS 应用中心选择“手动安装”。
-2. 上传 `clouddl_x86.fpk`。
+2. x86_64 设备上传 `clouddl_x86.fpk`；ARM64 设备上传 `clouddl_arm64.fpk`。
 3. 按安装向导选择下载目录。
 4. 安装后从桌面图标启动，或访问 `http://<NAS_IP>:8686`。
 5. 首次进入完成五步新手引导，阅读并勾选免责声明。
@@ -59,7 +60,7 @@ FPK 已针对 fnOS 安装要求处理：
 - 包内容直接位于归档根目录，没有多余外层文件夹
 - Linux 生命周期脚本为 LF 换行并带可执行权限
 - 安装向导和配置文件是有效 JSON
-- 自带 Python 3.11 原生运行时和 Linux x86_64 依赖
+- 自带 Python 3.11 原生运行时和对应架构的 Linux 依赖
 - 不包含 Docker 项目、Dockerfile 或在线依赖安装步骤
 - 配置、凭据和日志写入 fnOS 应用数据目录
 - 下载文件写入安装向导中选择的绝对路径
@@ -129,9 +130,9 @@ cloud-downloader/
 ├── app/
 │   ├── ui/
 │   ├── runtime/
-│   │   └── python/              # Linux x86_64 Python 3.11 运行时
+│   │   └── python/              # 默认 Linux x86_64 Python 3.11 运行时
 │   └── service/
-│       ├── vendor/              # 已预装的 Linux x86_64 Python 依赖
+│       ├── vendor/              # 默认已预装 Linux x86_64 Python 依赖
 │       └── src/
 │           ├── app.py
 │           ├── aria2_rpc.py
@@ -142,7 +143,9 @@ cloud-downloader/
 │           └── static/
 ├── tests/
 ├── build_fpk.py
-└── clouddl_x86.fpk
+├── build_arm64_fpk.py
+├── clouddl_x86.fpk
+└── clouddl_arm64.fpk
 ```
 
 ## 本地验证与打包
@@ -151,9 +154,17 @@ cloud-downloader/
 .\.venv\Scripts\python.exe -m unittest discover -v
 .\.venv\Scripts\python.exe build_fpk.py
 .\.venv\Scripts\python.exe -m unittest -v tests.test_fpk_package
+
+# ARM64 构建
+python build_arm64_fpk.py
+$env:FPK_PATH = (Resolve-Path ".\clouddl_arm64.fpk").Path
+$env:EXPECTED_ARCH = "arm64"
+python -m unittest -v tests.test_fpk_package
 ```
 
 `build_fpk.py` 调用飞牛官方 `fnpack` 进行校验和打包，生成符合 fnOS 规范、外层包含 `app.tgz` 的 FPK 安装包。
+
+`build_arm64_fpk.py` 在隔离暂存目录中将运行时替换为官方 `python-build-standalone` 的 CPython 3.11 ARM64 构建，将 `pydantic-core` 替换为 PyPI manylinux2014 aarch64 轮，并检查包内所有 ELF 均为 AArch64。构建所需文件放在 `.arm64-build/downloads/`，文件名和官方 SHA-256 固定在脚本中。
 
 安装包不在 NAS 上执行 Dockerfile、`apt-get`、在线 `pip install` 或镜像拉取。Python 运行时与依赖全部包含在 FPK 中。
 

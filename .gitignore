@@ -1,4 +1,5 @@
 .venv/
+.arm64-build/
 .preview/
 .playwright-cli/
 output/

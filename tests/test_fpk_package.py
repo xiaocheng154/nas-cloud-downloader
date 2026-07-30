@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import struct
 import tarfile
 import unittest
@@ -10,7 +11,11 @@ from pathlib import Path, PurePosixPath
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FPK_PATH = PROJECT_ROOT / "clouddl_x86.fpk"
+FPK_PATH = Path(
+    os.environ.get("FPK_PATH", str(PROJECT_ROOT / "clouddl_x86.fpk"))
+).resolve()
+EXPECTED_ARCH = os.environ.get("EXPECTED_ARCH", "x86_64")
+EXPECTED_ELF_MACHINE = {"x86_64": 62, "arm64": 183}[EXPECTED_ARCH]
 
 
 def png_rgba_pixels(path: Path) -> list[tuple[int, int, int, int]]:
@@ -221,7 +226,7 @@ class FpkPackageTests(unittest.TestCase):
         self.assertEqual(manifest["appname"], "clouddl")
         self.assertEqual(manifest["version"], "1.4.7")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
-        self.assertEqual(manifest["arch"], "x86_64")
+        self.assertEqual(manifest["arch"], EXPECTED_ARCH)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
         self.assertEqual(manifest["platform"], "")
 
@@ -248,7 +253,7 @@ class FpkPackageTests(unittest.TestCase):
             self.assertTrue((vendor / package).is_dir(), package)
         self.assertTrue(
             any(vendor.glob("pydantic_core/_pydantic_core*.so")),
-            "缺少 Linux x86_64 pydantic-core 扩展",
+            "缺少 Linux pydantic-core 扩展",
         )
 
     def test_desktop_icons_render_the_approved_cloud_and_arrow(self) -> None:
@@ -284,12 +289,14 @@ class FpkPackageTests(unittest.TestCase):
         )
         self.assertTrue((PROJECT_ROOT / "app/service/src/app.py").is_file())
 
-    def test_bundled_python_is_linux_x86_64_elf(self) -> None:
-        executable = PROJECT_ROOT / "app/runtime/python/bin/python3"
-        data = executable.read_bytes()[:20]
+    def test_bundled_python_is_linux_64_bit_elf(self) -> None:
+        data = self.read_app("runtime/python/bin/python3")[:20]
         self.assertEqual(data[:4], b"\x7fELF")
         self.assertEqual(data[4], 2, "Python 必须是 64 位 ELF")
-        self.assertEqual(int.from_bytes(data[18:20], "little"), 62)
+        self.assertEqual(
+            int.from_bytes(data[18:20], "little"),
+            EXPECTED_ELF_MACHINE,
+        )
 
     def test_visible_application_name_and_desktop_icon_are_consistent(self) -> None:
         source_manifest = (PROJECT_ROOT / "manifest").read_text(encoding="utf-8")
