@@ -158,13 +158,13 @@ cloud-downloader/
 # ARM64 构建
 python build_arm64_fpk.py
 $env:FPK_PATH = (Resolve-Path ".\clouddl_arm64.fpk").Path
-$env:EXPECTED_ARCH = "arm64"
+$env:EXPECTED_ARCH = "aarch64"
 python -m unittest -v tests.test_fpk_package
 ```
 
 `build_fpk.py` 调用飞牛官方 `fnpack` 进行校验和打包，生成符合 fnOS 规范、外层包含 `app.tgz` 的 FPK 安装包。
 
-`build_arm64_fpk.py` 在隔离暂存目录中将运行时替换为官方 `python-build-standalone` 的 CPython 3.11 ARM64 构建，将 `pydantic-core` 替换为 PyPI manylinux2014 aarch64 轮，并检查包内所有 ELF 均为 AArch64。构建所需文件放在 `.arm64-build/downloads/`，文件名和官方 SHA-256 固定在脚本中。
+`build_arm64_fpk.py` 在隔离暂存目录中将运行时替换为官方 `python-build-standalone` 的 CPython 3.11 ARM64 构建，将 `pydantic-core` 替换为 PyPI manylinux2014 aarch64 轮，并将 fnOS manifest 架构标识设为 `aarch64`。脚本会检查包内所有 ELF 均为 AArch64。构建所需文件放在 `.arm64-build/downloads/`，文件名和官方 SHA-256 固定在脚本中。
 
 安装包不在 NAS 上执行 Dockerfile、`apt-get`、在线 `pip install` 或镜像拉取。Python 运行时与依赖全部包含在 FPK 中。
 

@@ -173,7 +173,10 @@ def set_arm64_manifest() -> None:
     content = manifest.read_text(encoding="utf-8")
     if "arch = x86_64" not in content:
         raise RuntimeError("Expected x86_64 architecture marker was not found")
-    manifest.write_text(content.replace("arch = x86_64", "arch = arm64"), encoding="utf-8")
+    manifest.write_text(
+        content.replace("arch = x86_64", "arch = aarch64"),
+        encoding="utf-8",
+    )
 
 
 def audit_elf_tree(root: Path) -> list[Path]:
@@ -241,8 +244,8 @@ def audit_package(package: Path) -> int:
             if "=" in line:
                 key, value = line.split("=", 1)
                 manifest_values[key.strip()] = value.strip()
-        if manifest_values.get("arch") != "arm64":
-            raise RuntimeError("Packaged manifest is not ARM64")
+        if manifest_values.get("arch") != "aarch64":
+            raise RuntimeError("Packaged manifest is not AArch64")
         app_data = app_tgz.read()
 
     elf_count = 0

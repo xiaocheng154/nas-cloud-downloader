@@ -15,7 +15,7 @@ FPK_PATH = Path(
     os.environ.get("FPK_PATH", str(PROJECT_ROOT / "clouddl_x86.fpk"))
 ).resolve()
 EXPECTED_ARCH = os.environ.get("EXPECTED_ARCH", "x86_64")
-EXPECTED_ELF_MACHINE = {"x86_64": 62, "arm64": 183}[EXPECTED_ARCH]
+EXPECTED_ELF_MACHINE = {"x86_64": 62, "aarch64": 183}[EXPECTED_ARCH]
 
 
 def png_rgba_pixels(path: Path) -> list[tuple[int, int, int, int]]:
