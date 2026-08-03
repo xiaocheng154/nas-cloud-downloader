@@ -1,5 +1,5 @@
 appname = clouddl
-version = 1.4.10
+version = 1.5.0
 display_name = 多网盘下载器
 desc = 原生多网盘下载工具，支持百度网盘与夸克网盘文件及文件夹递归下载、可调分片与并发、实时速度和预计剩余时间、本机 Aria2 RPC、磁盘保护、定时下载、日志诊断和首次使用引导，无需 Docker
 platform = x86
