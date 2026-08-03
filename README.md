@@ -15,6 +15,8 @@
 
 - 百度网盘：BDUSS + STOKEN 登录、目录浏览、搜索、单文件及文件夹递归下载
 - 夸克网盘：Cookie 登录、目录浏览、搜索、单文件及文件夹递归下载
+- 阿里云盘：App 扫码、网页 refresh_token 或官方 OpenAPI 登录，支持目录浏览、搜索、单文件及文件夹递归下载
+- 文件管理：浏览 NAS 本地下载目录，支持本地及三网盘文件/文件夹重命名和图片缩略图
 - 文件夹下载保持原有多级目录结构
 - 标准 HTTP Range 分片下载，分片大小可在 1–50MB 调整
 - 小于 100MB 的文件自动使用 1MB 分片，大于 1GB 的文件至少使用 10MB 分片
@@ -82,7 +84,14 @@ FPK 已针对 fnOS 安装要求处理：
 3. 查看任意夸克网盘请求并复制完整 Cookie。
 4. 在多网盘下载器的“设置 > 账号与凭据”中验证并保存。
 
-凭据具有账号访问能力，只应在可信的 NAS 和浏览器中录入。
+### 阿里云盘
+
+1. 推荐在“设置 > 账号与凭据”中点击“阿里云盘 App 扫码登录”，扫码确认后凭据会自动保存在 NAS 服务端。
+2. 也可手动填写网页 `refresh_token`：登录 `https://www.aliyundrive.com`，通过 F12 → Application → Local Storage 获取。
+3. App 扫码与网页 `refresh_token` 均属于网页身份模式，仅支持不超过 100MB 的文件。
+4. 大文件及高速下载需切换到“官方 OpenAPI”模式，填入开放平台 client_id、client_secret 和对应的 OpenAPI refresh_token。
+
+凭据具有账号访问能力，只应在可信的 NAS 和浏览器中录入。网页私有接口使用 3 个兼容连接；OpenAPI 下载不再强制封顶，按“每文件连接数”设置执行。
 
 ## 默认下载策略
 
@@ -164,7 +173,7 @@ python -m unittest -v tests.test_fpk_package
 
 `build_fpk.py` 调用飞牛官方 `fnpack` 进行校验和打包，生成符合 fnOS 规范、外层包含 `app.tgz` 的 FPK 安装包。
 
-`build_arm64_fpk.py` 在隔离暂存目录中将运行时替换为官方 `python-build-standalone` 的 CPython 3.11 ARM64 构建，将 `pydantic-core` 替换为 PyPI manylinux2014 aarch64 轮，并将 fnOS manifest 架构标识设为 `aarch64`。脚本会检查包内所有 ELF 均为 AArch64。构建所需文件放在 `.arm64-build/downloads/`，文件名和官方 SHA-256 固定在脚本中。
+`build_arm64_fpk.py` 在隔离暂存目录中将运行时替换为官方 `python-build-standalone` 的 CPython 3.11 ARM64 构建，将 `pydantic-core` 替换为 PyPI manylinux2014 aarch64 轮，并按飞牛最新 Manifest 规范将 `platform` 设为 `arm`。脚本会检查包内所有 ELF 均为 AArch64，且包内不再包含已废弃的 `arch` 字段。构建所需文件放在 `.arm64-build/downloads/`，文件名和官方 SHA-256 固定在脚本中。
 
 安装包不在 NAS 上执行 Dockerfile、`apt-get`、在线 `pip install` 或镜像拉取。Python 运行时与依赖全部包含在 FPK 中。
 

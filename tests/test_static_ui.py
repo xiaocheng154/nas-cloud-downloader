@@ -55,6 +55,32 @@ class StaticUiTests(unittest.TestCase):
         self.assertIn("prefers-color-scheme: dark", css)
         self.assertIn("max-width: 700px", css)
 
+    def test_file_manager_has_local_remote_rename_and_generated_icons(self) -> None:
+        html = self.read("index.html")
+        script = self.read("app.js")
+        api = self.read("api.js")
+        css = self.read("styles.css")
+        self.assertIn('data-view="local"', html)
+        self.assertIn('id="rename-dialog"', html)
+        self.assertIn("openRenameDialog", script)
+        self.assertIn("thumbnailUrl", script)
+        self.assertIn("/rename", api)
+        self.assertIn("/thumbnail", api)
+        self.assertIn("file-manager-icons.png", css)
+        self.assertTrue((STATIC / "assets" / "file-manager-icons.png").is_file())
+        self.assertNotIn("▰", script)
+        self.assertNotIn("▧", script)
+
+    def test_alipan_qr_login_is_integrated(self) -> None:
+        html = self.read("index.html")
+        script = self.read("app.js")
+        api = self.read("api.js")
+        self.assertIn('id="alipan-qr-login"', html)
+        self.assertIn('id="alipan-qr-dialog"', html)
+        self.assertIn("startAlipanQr", script)
+        self.assertIn("pollAlipanQr", script)
+        self.assertIn("/api/alipan/qr/start", api)
+
     def test_settings_contains_every_required_control(self) -> None:
         html = self.read("index.html")
         control_names = (

@@ -36,6 +36,22 @@ def response(
 
 
 class QuarkClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rename_uses_file_rename_endpoint(self) -> None:
+        client = QuarkPanClient("k=v")
+        client._logged_in = True
+        client._client = AsyncMock()
+        client._client.post.return_value = response(
+            200,
+            json_data={"status": 200, "data": {}},
+        )
+
+        result = await client.rename("fid-1", "新名称.txt")
+
+        self.assertTrue(result["success"])
+        call = client._client.post.await_args
+        self.assertTrue(str(call.args[0]).endswith("/file/rename"))
+        self.assertEqual(call.kwargs["json"], {"fid": "fid-1", "file_name": "新名称.txt"})
+
     async def test_verify_login_uses_account_endpoint_and_current_payload(
         self,
     ) -> None:

@@ -66,6 +66,7 @@ class AppSettings:
     aria2_rpc_url: str = "http://127.0.0.1:6800/jsonrpc"
     aria2_secret: str = ""
     baidu_app_id: int = 250528
+    alipan_auth_mode: str = "refresh_token"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,6 +135,8 @@ class AppSettings:
         if len(self.aria2_secret) > 4096:
             raise SettingsValidationError("aria2_secret 过长")
         self._integer("baidu_app_id", self.baidu_app_id, 1, 999999)
+        if self.alipan_auth_mode not in {"refresh_token", "openapi"}:
+            raise SettingsValidationError("alipan_auth_mode 无效")
 
     @staticmethod
     def _number(name: str, value: Any, minimum: float, maximum: float) -> None:
@@ -208,10 +211,13 @@ class CredentialStore:
             return {
                 "baidu": {"configured": bool(credentials.get("baidu", {}).get("bduss"))},
                 "quark": {"configured": bool(credentials.get("quark", {}).get("cookie"))},
+                "alipan": {
+                    "configured": bool(credentials.get("alipan", {}).get("refresh_token"))
+                },
             }
 
     def get(self, provider: str) -> dict[str, str]:
-        if provider not in {"baidu", "quark"}:
+        if provider not in {"baidu", "quark", "alipan"}:
             raise SettingsValidationError("不支持的网盘类型")
         with self._lock:
             return dict(self._load_all().get(provider, {}))
@@ -236,6 +242,17 @@ class CredentialStore:
             if not cookie:
                 raise SettingsValidationError("Cookie 不能为空")
             cleaned = {"cookie": cookie}
+        elif provider == "alipan":
+            refresh_token = str(data.get("refresh_token", "")).strip()
+            if not refresh_token:
+                raise SettingsValidationError("refresh_token 不能为空")
+            cleaned = {
+                "refresh_token": refresh_token,
+                "client_id": str(data.get("client_id", "")).strip(),
+                "client_secret": str(data.get("client_secret", "")).strip(),
+                "device_id": str(data.get("device_id", "")).strip(),
+                "signature": str(data.get("signature", "")).strip(),
+            }
         else:
             raise SettingsValidationError("不支持的网盘类型")
         with self._lock:
@@ -244,7 +261,7 @@ class CredentialStore:
             atomic_write_json(self.path, credentials)
 
     def clear(self, provider: str) -> None:
-        if provider not in {"baidu", "quark"}:
+        if provider not in {"baidu", "quark", "alipan"}:
             raise SettingsValidationError("不支持的网盘类型")
         with self._lock:
             credentials = self._load_all()

@@ -827,6 +827,10 @@ class DownloadManager:
         if str(task.get("source_profile", "")).startswith("quark-"):
             connections = min(connections, 8)
             segment_size = 10 * MIB
+        if task.get("source_profile") == "alipan-private":
+            # 网页私有接口仅作兼容通道；开放平台按用户设置使用并发数。
+            connections = min(connections, 3)
+            segment_size = 10 * MIB
         ranges = asyncio.Queue()
         for byte_range in plan_download_ranges(
             total=total,

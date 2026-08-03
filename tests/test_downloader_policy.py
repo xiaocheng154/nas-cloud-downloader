@@ -620,6 +620,58 @@ class NestedDirectoryDownloadTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(task["connections_used"], 16)
 
+    async def test_alipan_openapi_uses_configured_connections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=SettingsStore(root / "config"),
+            )
+            manager._stream_range_to_file = AsyncMock()
+            manager._wait_until_allowed = AsyncMock()
+            manager._rate_limiter.consume = AsyncMock()
+            total = 16 * 1024 * 1024
+            task = {
+                "total_size": total,
+                "downloaded": 0,
+                "speed": 0.0,
+                "source_profile": "alipan-openapi",
+            }
+
+            await manager._download_ranges(
+                task, MagicMock(), "https://download.example/file",
+                root / "download.part", total, 16,
+            )
+
+            self.assertEqual(task["connections_used"], 16)
+
+    async def test_alipan_private_is_limited_to_three_connections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=SettingsStore(root / "config"),
+            )
+            manager._stream_range_to_file = AsyncMock()
+            manager._wait_until_allowed = AsyncMock()
+            manager._rate_limiter.consume = AsyncMock()
+            total = 40 * 1024 * 1024
+            task = {
+                "total_size": total,
+                "downloaded": 0,
+                "speed": 0.0,
+                "source_profile": "alipan-private",
+            }
+
+            await manager._download_ranges(
+                task, MagicMock(), "https://download.example/file",
+                root / "download.part", total, 16,
+            )
+
+            self.assertEqual(task["connections_used"], 3)
+
     def test_small_file_range_plan_uses_multiple_connections(self) -> None:
         manager_module = __import__("downloader")
 

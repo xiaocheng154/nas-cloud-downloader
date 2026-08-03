@@ -101,6 +101,10 @@
         <span>多网盘下载器</span>
       </div>
       <nav class="primary-nav" aria-label="主导航">
+        <button class="nav-item" data-view="local" type="button" aria-label="NAS 本地文件">
+          <span class="nav-raster-icon nav-local-icon" aria-hidden="true"></span>
+          <span>NAS 本地</span>
+        </button>
         <button class="nav-item is-active" data-view="baidu" type="button" aria-label="百度网盘" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 13.7a4 4 0 1 1 1.4-7.8A4.8 4.8 0 0 1 18.8 8a3.5 3.5 0 0 1-.3 7H8.2a3.2 3.2 0 0 1 0-6.4"/></svg>
           <span>百度网盘</span>
@@ -110,6 +114,11 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l5.5 3.2"/></svg>
           <span>夸克网盘</span>
           <i class="nav-dot" id="quark-dot"></i>
+        </button>
+        <button class="nav-item" data-view="alipan" type="button" aria-label="阿里云盘">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c4 0 7 3 7 7v4h-2V9a5 5 0 0 0-10 0v4H5V9c0-4 3-7 7-7z"/><path d="M5 14h14v3a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/></svg>
+          <span>阿里云盘</span>
+          <i class="nav-dot" id="alipan-dot"></i>
         </button>
         <button class="nav-item" data-view="downloads" type="button" aria-label="下载任务">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg>
@@ -130,6 +139,37 @@
         <div class="mobile-brand"><img src="/static/assets/logo.svg" alt="">多网盘下载器</div>
         <button class="icon-button" id="mobile-theme" type="button" aria-label="切换主题">◐</button>
       </header>
+
+      <section class="view" id="view-local" data-panel="local">
+        <div class="page-heading provider-page-heading local-page-heading">
+          <div class="provider-title-block">
+            <p class="eyebrow">当前下载目录</p>
+            <h1>NAS 本地文件</h1>
+            <p class="local-root-note" id="local-root-note">读取本地目录中…</p>
+          </div>
+          <article class="activity-card local-summary-card">
+            <h2>本地管理</h2>
+            <p>浏览下载目录，预览图片缩略图，并安全重命名文件或文件夹。</p>
+          </article>
+        </div>
+        <div class="provider-tools">
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+            <input id="local-search" type="search" placeholder="搜索本地文件" aria-label="搜索 NAS 本地文件">
+          </div>
+          <button class="button button-secondary" id="local-refresh" type="button">刷新</button>
+        </div>
+        <div class="file-toolbar breadcrumbs-toolbar">
+          <div class="breadcrumbs" id="local-breadcrumbs"></div>
+        </div>
+        <div class="file-surface" id="local-surface">
+          <table class="file-table">
+            <thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+            <tbody id="local-files"></tbody>
+          </table>
+          <div class="empty-state" id="local-empty">当前下载目录为空</div>
+        </div>
+      </section>
 
       <section class="view is-active" id="view-baidu" data-panel="baidu">
         <div class="page-heading provider-page-heading">
@@ -196,6 +236,40 @@
             <tbody id="quark-files"></tbody>
           </table>
           <div class="empty-state" id="quark-empty">请先在设置中配置夸克网盘凭据</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-alipan" data-panel="alipan">
+        <div class="page-heading provider-page-heading">
+          <div class="provider-title-block">
+            <h1>阿里云盘</h1>
+            <button class="account-chip" id="alipan-account" type="button">未连接</button>
+          </div>
+          <article class="activity-card">
+            <h2>下载活动</h2>
+            <div class="activity-metrics">
+              <div><strong id="alipan-active">0</strong><span>下载中</span></div>
+              <div><strong id="alipan-completed">0</strong><span>已完成</span></div>
+              <div><strong id="alipan-total">0 B</strong><span>总下载量</span></div>
+            </div>
+          </article>
+        </div>
+        <div class="provider-tools">
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+            <input id="alipan-search" type="search" placeholder="搜索当前目录文件" aria-label="搜索阿里云盘文件">
+          </div>
+          <button class="button button-secondary" id="alipan-refresh" type="button">刷新</button>
+        </div>
+        <div class="file-toolbar breadcrumbs-toolbar">
+          <div class="breadcrumbs" id="alipan-breadcrumbs"></div>
+        </div>
+        <div class="file-surface" id="alipan-surface">
+          <table class="file-table">
+            <thead><tr><th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+            <tbody id="alipan-files"></tbody>
+          </table>
+          <div class="empty-state" id="alipan-empty">请先在设置中配置阿里云盘凭据</div>
         </div>
       </section>
 
@@ -268,8 +342,45 @@
                   <button class="button button-text danger" id="clear-quark-credential" type="button">清除</button>
                 </div>
               </section>
+              <section class="credential-panel">
+                <div class="credential-title"><h3>阿里云盘</h3><span id="alipan-credential-state">未配置</span></div>
+                <label class="field">
+                  <span>鉴权方式</span>
+                  <select name="alipan_auth_mode">
+                    <option value="refresh_token">网页 refresh_token（仅支持不超过 100 MB）</option>
+                    <option value="openapi">官方 OpenAPI（大文件及高速下载推荐）</option>
+                  </select>
+                </label>
+                <label class="field"><span>refresh_token</span><textarea name="alipan_refresh_token" autocomplete="off" spellcheck="false" placeholder="粘贴阿里云盘官方登录后获取的 refresh_token"></textarea></label>
+                <details class="credential-help">
+                  <summary>如何获取阿里云盘 refresh_token</summary>
+                  <ol>
+                    <li>用官方客户端或官方网页登录阿里云盘。</li>
+                    <li>从浏览器 Local Storage / 客户端配置中复制 <code>refresh_token</code>。</li>
+                    <li>网页 refresh_token 受官方网页端 100 MB 下载限制；大文件请使用 OpenAPI refresh_token。</li>
+                    <li>refresh_token 属于登录凭据，请勿外泄。</li>
+                  </ol>
+                </details>
+                <details class="credential-help">
+                  <summary>开放平台 OAuth 模式</summary>
+                  <ol>
+                    <li>在 <code>open.alipan.com</code> 注册应用，获得 client_id 与 client_secret。</li>
+                    <li>填入下方两个字段，并使用开放平台获取的 refresh_token。</li>
+                    <li>OpenAPI 支持大文件直链，并按“每文件连接数”设置进行分片下载。</li>
+                  </ol>
+                </details>
+                <label class="field"><span>client_id（OpenAPI 必填）</span><input name="alipan_client_id" type="text" autocomplete="off" placeholder="开放平台 OAuth 的 client_id"></label>
+                <label class="field"><span>client_secret（可选）</span><input name="alipan_client_secret" type="password" autocomplete="new-password" placeholder="开放平台 OAuth 的 client_secret"></label>
+                <label class="field"><span>device_id（可选）</span><input name="alipan_device_id" type="text" autocomplete="off" placeholder="网页版 x-device-id，部分接口需要"></label>
+                <label class="field"><span>signature（可选）</span><input name="alipan_signature" type="password" autocomplete="new-password" placeholder="网页版 x-signature，部分接口需要"></label>
+                <div class="inline-actions">
+                  <button class="button button-secondary" id="alipan-qr-login" type="button">扫码登录</button>
+                  <button class="button button-secondary" id="save-alipan-credential" type="button">验证并保存</button>
+                  <button class="button button-text danger" id="clear-alipan-credential" type="button">清除</button>
+                </div>
+              </section>
             </div>
-            <p class="credential-warning">Cookie、BDUSS 和 STOKEN 等同于登录凭据，请勿通过聊天、截图或公开渠道发送。若已经泄露，请立即退出账号会话并重新登录。</p>
+            <p class="credential-warning">Cookie、BDUSS、STOKEN 和 refresh_token 等同于登录凭据，请勿通过聊天、截图或公开渠道发送。若已经泄露，请立即退出账号会话并重新登录。</p>
           </article>
 
           <article class="settings-card settings-page" id="settings-panel-downloads" data-settings-panel="downloads" role="tabpanel" aria-labelledby="settings-tab-downloads" hidden>
@@ -386,6 +497,39 @@
         </form>
       </section>
     </main>
+  </div>
+
+  <div class="rename-backdrop is-hidden" id="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+    <form class="rename-card" id="rename-form">
+      <span class="rename-hero-icon" aria-hidden="true"></span>
+      <p class="eyebrow">文件管理</p>
+      <h2 id="rename-title">重命名</h2>
+      <p id="rename-current-name"></p>
+      <label class="field">
+        <span>新名称</span>
+        <input id="rename-input" type="text" maxlength="255" autocomplete="off" required>
+      </label>
+      <div class="rename-actions">
+        <button class="button button-ghost" id="rename-cancel" type="button">取消</button>
+        <button class="button button-primary" type="submit">确认重命名</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="qr-backdrop is-hidden" id="alipan-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="alipan-qr-title">
+    <section class="qr-card">
+      <p class="eyebrow">阿里云盘网页登录</p>
+      <h2 id="alipan-qr-title">使用阿里云盘 App 扫码</h2>
+      <div class="qr-image-frame">
+        <img id="alipan-qr-image" alt="阿里云盘登录二维码">
+      </div>
+      <strong class="qr-status" id="alipan-qr-status">正在生成二维码</strong>
+      <p>扫码后请在手机中确认。本方式将切换到网页 refresh_token 模式，网页接口仅支持不超过 100 MB 的文件下载。</p>
+      <div class="qr-actions">
+        <button class="button button-ghost" id="alipan-qr-cancel" type="button">取消</button>
+        <button class="button button-secondary" id="alipan-qr-refresh" type="button">重新生成</button>
+      </div>
+    </section>
   </div>
 
   <div class="toast-region" id="toast-region" aria-live="polite"></div>

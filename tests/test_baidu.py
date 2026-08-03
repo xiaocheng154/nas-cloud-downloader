@@ -8,6 +8,23 @@ from baidu import BaiduPanClient
 
 
 class BaiduClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rename_uses_filemanager_endpoint(self) -> None:
+        client = BaiduPanClient("bduss", "stoken")
+        client._logged_in = True
+        response = Mock(status_code=200)
+        response.json.return_value = {"errno": 0}
+        transport = Mock()
+        transport.post = AsyncMock(return_value=response)
+        client._get_client = Mock(return_value=transport)
+
+        result = await client.rename("/旧名称.txt", "新名称.txt")
+
+        self.assertTrue(result["success"])
+        call = transport.post.await_args
+        self.assertTrue(call.args[0].endswith("/api/filemanager"))
+        self.assertEqual(call.kwargs["params"]["opera"], "rename")
+        self.assertIn("新名称.txt", call.kwargs["data"]["filelist"])
+
     async def test_path_download_uses_pcs_locatedownload(self) -> None:
         client = BaiduPanClient(
             bduss="bduss",

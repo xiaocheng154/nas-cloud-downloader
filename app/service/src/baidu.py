@@ -43,6 +43,7 @@ class BaiduPanClient:
         self._logged_in = False
         self._username = ""
         self._user_id: int | None = None
+        self._thumbnail_urls: dict[str, str] = {}
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -212,10 +213,22 @@ class BaiduPanClient:
             if d.get("errno") == 0:
                 fl = []
                 for i in d.get("list", []):
+                    thumbnails = i.get("thumbs") if isinstance(i.get("thumbs"), dict) else {}
+                    thumbnail_url = str(
+                        thumbnails.get("url3")
+                        or thumbnails.get("url2")
+                        or thumbnails.get("url1")
+                        or i.get("thumb_url")
+                        or ""
+                    )
+                    item_path = str(i["path"])
+                    if thumbnail_url:
+                        self._thumbnail_urls[item_path] = thumbnail_url
                     fl.append({
-                        "name": i["server_filename"], "path": i["path"],
+                        "name": i["server_filename"], "path": item_path,
                         "is_dir": i["isdir"] == 1, "size": i.get("size", 0),
                         "mtime": i.get("mtime", 0), "fs_id": i.get("fs_id", 0),
+                        "has_thumbnail": bool(thumbnail_url),
                     })
                 return {"success": True, "path": path, "files": fl, "total": d.get("sum", len(fl))}
             return {"success": False, "error": f"获取列表失败: {d.get('errno')}"}
@@ -391,15 +404,63 @@ class BaiduPanClient:
             })
             d = r.json()
             if d.get("errno") == 0:
-                fl = [{
-                    "name": i["server_filename"], "path": i["path"],
-                    "is_dir": i["isdir"] == 1, "size": i.get("size", 0),
-                    "fs_id": i.get("fs_id", 0),
-                } for i in d.get("list", [])]
+                fl = []
+                for i in d.get("list", []):
+                    thumbnails = i.get("thumbs") if isinstance(i.get("thumbs"), dict) else {}
+                    thumbnail_url = str(thumbnails.get("url3") or thumbnails.get("url2") or "")
+                    item_path = str(i["path"])
+                    if thumbnail_url:
+                        self._thumbnail_urls[item_path] = thumbnail_url
+                    fl.append({
+                        "name": i["server_filename"], "path": item_path,
+                        "is_dir": i["isdir"] == 1, "size": i.get("size", 0),
+                        "fs_id": i.get("fs_id", 0),
+                        "has_thumbnail": bool(thumbnail_url),
+                    })
                 return {"success": True, "files": fl, "total": d.get("sum", 0)}
             return {"success": False, "error": f"搜索失败: {d.get('errno')}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def rename(self, path: str, new_name: str) -> dict:
+        if not self._logged_in:
+            verified = await self.verify_login()
+            if not verified.get("success"):
+                return verified
+        try:
+            response = await self._get_client().post(
+                f"{BAIDU_API}/filemanager",
+                params={"opera": "rename", "async": 2, "onnest": "fail"},
+                data={
+                    "filelist": json.dumps(
+                        [{"path": path, "newname": new_name}],
+                        ensure_ascii=False,
+                    )
+                },
+            )
+            payload = response.json()
+            if payload.get("errno") == 0:
+                self._thumbnail_urls.pop(path, None)
+                return {"success": True, "name": new_name}
+            return {"success": False, "error": f"百度重命名失败：{payload.get('errno', response.status_code)}"}
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+            return {"success": False, "error": f"百度重命名失败：{type(exc).__name__}"}
+
+    async def fetch_thumbnail(self, path: str) -> dict:
+        url = self._thumbnail_urls.get(path, "")
+        if not url:
+            return {"success": False, "error": "缩略图不存在"}
+        try:
+            response = await self._get_client().get(url)
+            if response.status_code != 200 or len(response.content) > 8 * 1024 * 1024:
+                return {"success": False, "error": "缩略图读取失败"}
+            return {
+                "success": True,
+                "content": response.content,
+                "content_type": response.headers.get("content-type", "image/jpeg"),
+            }
+        except httpx.HTTPError:
+            return {"success": False, "error": "缩略图读取失败"}
 
     async def walk_folder(self, root_path: str) -> dict:
         """递归列出文件夹中的文件，并保留相对目录。"""

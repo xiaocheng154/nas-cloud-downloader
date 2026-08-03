@@ -15,7 +15,7 @@ BUILD_ROOT = PROJECT_ROOT / ".arm64-build"
 DOWNLOAD_ROOT = BUILD_ROOT / "downloads"
 STAGING_ROOT = BUILD_ROOT / "staging"
 OUTPUT_PATH = PROJECT_ROOT / "clouddl_arm64.fpk"
-FNPACK = PROJECT_ROOT / "fnpack-1.2.1-windows-amd64.exe"
+FNPACK = PROJECT_ROOT / "fnpack-1.2.3-windows-amd64.exe"
 
 PYTHON_ARCHIVE = (
     DOWNLOAD_ROOT
@@ -168,13 +168,13 @@ def remove_generated_caches() -> None:
         resolved.unlink()
 
 
-def set_arm64_manifest() -> None:
+def set_arm_manifest() -> None:
     manifest = STAGING_ROOT / "manifest"
     content = manifest.read_text(encoding="utf-8")
-    if "arch = x86_64" not in content:
-        raise RuntimeError("Expected x86_64 architecture marker was not found")
+    if "platform = x86" not in content:
+        raise RuntimeError("Expected fnOS x86 platform marker was not found")
     manifest.write_text(
-        content.replace("arch = x86_64", "arch = aarch64"),
+        content.replace("platform = x86", "platform = arm"),
         encoding="utf-8",
     )
 
@@ -244,8 +244,10 @@ def audit_package(package: Path) -> int:
             if "=" in line:
                 key, value = line.split("=", 1)
                 manifest_values[key.strip()] = value.strip()
-        if manifest_values.get("arch") != "aarch64":
-            raise RuntimeError("Packaged manifest is not AArch64")
+        if manifest_values.get("platform") != "arm":
+            raise RuntimeError("Packaged manifest is not marked for fnOS ARM")
+        if "arch" in manifest_values:
+            raise RuntimeError("Packaged manifest still contains deprecated arch field")
         app_data = app_tgz.read()
 
     elf_count = 0
@@ -274,7 +276,7 @@ def main() -> None:
     install_python_runtime()
     install_pydantic_core()
     remove_generated_caches()
-    set_arm64_manifest()
+    set_arm_manifest()
     staged_elfs = audit_elf_tree(STAGING_ROOT / "app")
     package = build_package()
     packaged_elf_count = audit_package(package)

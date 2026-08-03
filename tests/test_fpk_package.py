@@ -16,6 +16,7 @@ FPK_PATH = Path(
 ).resolve()
 EXPECTED_ARCH = os.environ.get("EXPECTED_ARCH", "x86_64")
 EXPECTED_ELF_MACHINE = {"x86_64": 62, "aarch64": 183}[EXPECTED_ARCH]
+EXPECTED_PLATFORM = {"x86_64": "x86", "aarch64": "arm"}[EXPECTED_ARCH]
 
 
 def png_rgba_pixels(path: Path) -> list[tuple[int, int, int, int]]:
@@ -146,10 +147,20 @@ class FpkPackageTests(unittest.TestCase):
             "runtime/python/bin/python3.11",
             "runtime/python/lib/libpython3.11.so.1.0",
             "service/src/app.py",
+            "service/src/alipan_qr.py",
+            "service/src/local_files.py",
             "service/src/credential_parser.py",
             "service/src/static/app.js",
             "service/src/static/index.html",
+            "service/src/static/assets/file-manager-icons.png",
             "service/vendor/fastapi/__init__.py",
+            "service/vendor/qrcode/__init__.py",
+            "service/vendor/qrcode/compat/png.py",
+            "service/vendor/qrcode/image/pure.py",
+            "service/vendor/qrcode/image/svg.py",
+            "service/vendor/qrcode/image/styles/moduledrawers/base.py",
+            "service/vendor/qrcode/image/styles/moduledrawers/svg.py",
+            "service/vendor/qrcode-LICENSE.txt",
             "ui/config",
             "ui/images/icon_64.png",
             "ui/images/icon_256.png",
@@ -224,11 +235,11 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.4.7")
+        self.assertEqual(manifest["version"], "1.4.10")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
-        self.assertEqual(manifest["arch"], EXPECTED_ARCH)
+        self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
-        self.assertEqual(manifest["platform"], "")
+        self.assertEqual(manifest["platform"], EXPECTED_PLATFORM)
 
     def test_json_metadata_is_valid_and_consistent(self) -> None:
         privilege = json.loads(self.read_outer("config/privilege"))
@@ -298,6 +309,23 @@ class FpkPackageTests(unittest.TestCase):
             EXPECTED_ELF_MACHINE,
         )
 
+    def test_all_elf_files_match_package_architecture(self) -> None:
+        elf_files = []
+        for name, member in self.app_members.items():
+            if not member.isfile():
+                continue
+            data = self.read_app(name)[:20]
+            if data[:4] != b"\x7fELF":
+                continue
+            elf_files.append(name)
+            self.assertEqual(data[4], 2, f"{name} 不是 64 位 ELF")
+            self.assertEqual(
+                int.from_bytes(data[18:20], "little"),
+                EXPECTED_ELF_MACHINE,
+                f"{name} 架构与安装包平台不一致",
+            )
+        self.assertTrue(elf_files, "安装包内未发现 ELF 文件")
+
     def test_visible_application_name_and_desktop_icon_are_consistent(self) -> None:
         source_manifest = (PROJECT_ROOT / "manifest").read_text(encoding="utf-8")
         source_ui = json.loads(
@@ -319,8 +347,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.4.7", source_manifest)
-        self.assertIn('APP_VERSION = "1.4.7"', source_app)
+        self.assertIn("version = 1.4.10", source_manifest)
+        self.assertIn("platform = x86", source_manifest)
+        self.assertNotIn("arch =", source_manifest)
+        self.assertIn('APP_VERSION = "1.4.10"', source_app)
 
 
 if __name__ == "__main__":

@@ -39,8 +39,14 @@ export const api = {
   }),
   clearCredential: (provider) => request(`/api/credentials/${provider}`, {method: "DELETE"}),
   providerStatus: (provider) => request(`/api/${provider}/status`),
+  startAlipanQr: () => request("/api/alipan/qr/start", {method: "POST"}),
+  alipanQrStatus: (sessionId) => request(`/api/alipan/qr/${encodeURIComponent(sessionId)}/status`),
+  cancelAlipanQr: (sessionId) => request(`/api/alipan/qr/${encodeURIComponent(sessionId)}`, {method: "DELETE"}),
   files: (provider, path) => request(query(`/api/${provider}/list`, {path})),
   search: (provider, keyword, path) => request(query(`/api/${provider}/search`, {keyword, path})),
+  rename: (provider, payload) => request(`/api/${provider}/rename`, {
+    method: "POST", headers: jsonHeaders, body: JSON.stringify(payload)
+  }),
   download: (provider, id, path = "") => request(
     query(`/api/${provider}/download/${encodeURIComponent(id)}`, {path}),
     {method: "POST"},
@@ -56,6 +62,12 @@ export const api = {
   diagnostics: () => request("/api/diagnostics", {method: "POST"}),
   aria2Status: () => request("/api/aria2/status"),
 };
+
+export function thumbnailUrl(provider, key) {
+  return query(`/api/${provider}/thumbnail`, {
+    [provider === "local" ? "path" : "key"]: key,
+  });
+}
 
 export function downloadFile(path) {
   const anchor = document.createElement("a");

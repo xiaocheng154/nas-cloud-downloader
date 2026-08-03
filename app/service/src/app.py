@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+import httpx
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -33,12 +35,15 @@ from diagnostics import (
     run_diagnostics,
     tail_log,
 )
+from alipan import AlipanPanClient
+from alipan_qr import AlipanQrLoginManager
 from downloader import DownloadManager
+from local_files import LocalFileManager
 from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.4.7"
+APP_VERSION = "1.4.10"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -67,6 +72,8 @@ dl_manager = DownloadManager(
     settings_store=settings_store,
     aria2_client=aria2_client,
 )
+local_file_manager = LocalFileManager(DOWNLOAD_DIR)
+alipan_qr_manager = AlipanQrLoginManager()
 clients_lock = asyncio.Lock()
 
 
@@ -85,6 +92,28 @@ def _new_quark_client() -> QuarkPanClient:
     return QuarkPanClient(cookie=credentials.get("cookie", ""))
 
 
+def _persist_alipan_refresh_token(refresh_token: str) -> None:
+    credentials = credential_store.get("alipan")
+    if not credentials.get("refresh_token"):
+        return
+    credentials["refresh_token"] = refresh_token
+    credential_store.update("alipan", credentials)
+
+
+def _new_alipan_client() -> AlipanPanClient:
+    credentials = credential_store.get("alipan")
+    settings = settings_store.load()
+    return AlipanPanClient(
+        refresh_token=credentials.get("refresh_token", ""),
+        client_id=credentials.get("client_id", ""),
+        client_secret=credentials.get("client_secret", ""),
+        auth_mode=settings.alipan_auth_mode,
+        device_id=credentials.get("device_id", ""),
+        signature=credentials.get("signature", ""),
+        on_refresh_token=_persist_alipan_refresh_token,
+    )
+
+
 def _baidu_download_headers() -> dict[str, str]:
     return {
         "User-Agent": BAIDU_PCS_USER_AGENT,
@@ -97,12 +126,17 @@ def _quark_download_headers() -> dict[str, str]:
     return quark_client.download_headers()
 
 
+def _alipan_download_headers() -> dict[str, str]:
+    return alipan_client.download_headers()
+
+
 def _folder_relative_dir(root_name: str, relative_dir: str) -> str:
     return f"{root_name}/{relative_dir}" if relative_dir else root_name
 
 
 baidu_client = _new_baidu_client()
 quark_client = _new_quark_client()
+alipan_client = _new_alipan_client()
 
 
 @asynccontextmanager
@@ -114,6 +148,8 @@ async def lifespan(_: FastAPI):
         await aria2_client.close()
         await baidu_client.close()
         await quark_client.close()
+        await alipan_client.close()
+        await alipan_qr_manager.close()
         logger.info("多网盘下载器 stopped")
         for handler in list(logger.handlers):
             handler.flush()
@@ -248,6 +284,7 @@ async def update_settings(data: dict[str, Any] = Body(...)):
         if prepared_download_dir is not None:
             _persist_download_dir(prepared_download_dir)
             dl_manager.download_dir = prepared_download_dir
+            local_file_manager.set_root(prepared_download_dir)
     except SettingsValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
     except OSError as exc:
@@ -256,6 +293,7 @@ async def update_settings(data: dict[str, Any] = Body(...)):
     logger = configure_logging(settings, CONFIG_DIR)
     _sync_aria2_settings()
     baidu_client.app_id = settings.baidu_app_id
+    alipan_client.auth_mode = settings.alipan_auth_mode
     logger.info("Settings updated")
     return _public_settings()
 
@@ -321,6 +359,52 @@ async def _replace_quark(credentials: dict[str, Any], persist: bool) -> dict[str
     return result
 
 
+async def _replace_alipan(
+    credentials: dict[str, Any],
+    persist: bool,
+    auth_mode_override: str | None = None,
+) -> dict[str, Any]:
+    settings = settings_store.load()
+    auth_mode = auth_mode_override or settings.alipan_auth_mode
+    cleaned = {
+        "refresh_token": str(credentials.get("refresh_token", "")).strip(),
+        "client_id": str(credentials.get("client_id", "")).strip(),
+        "client_secret": str(credentials.get("client_secret", "")).strip(),
+        "device_id": str(credentials.get("device_id", "")).strip(),
+        "signature": str(credentials.get("signature", "")).strip(),
+    }
+    candidate = AlipanPanClient(
+        refresh_token=cleaned["refresh_token"],
+        client_id=cleaned["client_id"],
+        client_secret=cleaned["client_secret"],
+        auth_mode=auth_mode,
+        device_id=cleaned["device_id"],
+        signature=cleaned["signature"],
+    )
+    result = await candidate.verify_login()
+    if not result.get("success"):
+        await candidate.close()
+        raise HTTPException(400, result.get("error", "阿里云盘凭据验证失败"))
+    global alipan_client
+    async with clients_lock:
+        previous = alipan_client
+        alipan_client = candidate
+        if persist:
+            try:
+                cleaned["refresh_token"] = candidate.refresh_token
+                credential_store.update("alipan", cleaned)
+                candidate.on_refresh_token = _persist_alipan_refresh_token
+                if auth_mode_override:
+                    settings_store.update({"alipan_auth_mode": auth_mode_override})
+            except SettingsValidationError as exc:
+                alipan_client = previous
+                await candidate.close()
+                raise HTTPException(422, str(exc)) from exc
+        await previous.close()
+    logger.info("Alipan credentials updated")
+    return result
+
+
 @app.put("/api/credentials/{provider}")
 async def update_credentials(
     provider: str,
@@ -330,6 +414,8 @@ async def update_credentials(
         result = await _replace_baidu(data, persist=True)
     elif provider == "quark":
         result = await _replace_quark(data, persist=True)
+    elif provider == "alipan":
+        result = await _replace_alipan(data, persist=True)
     else:
         raise HTTPException(404, "不支持的网盘类型")
     return {
@@ -344,14 +430,17 @@ async def clear_credentials(provider: str):
         credential_store.clear(provider)
     except SettingsValidationError as exc:
         raise HTTPException(404, str(exc)) from exc
-    global baidu_client, quark_client
+    global baidu_client, quark_client, alipan_client
     async with clients_lock:
         if provider == "baidu":
             await baidu_client.close()
             baidu_client = BaiduPanClient()
-        else:
+        elif provider == "quark":
             await quark_client.close()
             quark_client = QuarkPanClient()
+        else:
+            await alipan_client.close()
+            alipan_client = AlipanPanClient()
     logger.info("%s credentials cleared", provider)
     return credential_store.status()
 
@@ -625,6 +714,286 @@ async def quark_status():
         ),
         "configured": configured,
     }
+
+
+@app.post("/api/alipan/login")
+async def alipan_login(data: dict[str, Any] = Body(...)):
+    return await _replace_alipan(data, persist=True)
+
+
+@app.post("/api/alipan/qr/start")
+async def alipan_qr_start():
+    try:
+        return await alipan_qr_manager.start()
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.warning("阿里云盘二维码生成失败: %s", type(exc).__name__)
+        raise HTTPException(502, f"生成阿里云盘二维码失败：{exc}") from exc
+
+
+@app.get("/api/alipan/qr/{session_id}.svg")
+async def alipan_qr_image(session_id: str):
+    try:
+        svg = await alipan_qr_manager.image(session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/api/alipan/qr/{session_id}/status")
+async def alipan_qr_status(session_id: str):
+    try:
+        result = await alipan_qr_manager.poll(session_id)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "查询阿里云盘扫码状态失败") from exc
+    refresh_token = str(result.pop("refresh_token", ""))
+    if result.get("status") != "confirmed" or not refresh_token:
+        return result
+    credentials = credential_store.get("alipan")
+    credentials["refresh_token"] = refresh_token
+    verified = await _replace_alipan(
+        credentials,
+        persist=True,
+        auth_mode_override="refresh_token",
+    )
+    return {
+        **result,
+        "logged_in": True,
+        "username": verified.get("username", ""),
+    }
+
+
+@app.delete("/api/alipan/qr/{session_id}")
+async def alipan_qr_cancel(session_id: str):
+    await alipan_qr_manager.cancel(session_id)
+    return {"success": True}
+
+
+@app.get("/api/alipan/list")
+async def alipan_list(
+    path: str = Query("/"),
+    page: int = Query(1),
+    page_size: int = Query(100),
+):
+    result = await alipan_client.list_files(
+        path=path,
+        page=page,
+        page_size=page_size,
+    )
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "未知错误"))
+    return result
+
+
+@app.post("/api/alipan/download/{file_id}")
+async def alipan_download(file_id: str):
+    link_result = await alipan_client.get_download_url(file_id)
+    if not link_result.get("success"):
+        raise HTTPException(400, link_result.get("error", "获取下载链接失败"))
+    task_id = await dl_manager.start_download(
+        url=link_result["url"],
+        filename=link_result["name"],
+        expected_size=link_result.get("size"),
+        remote_hash=link_result.get("sha256") or link_result.get("content_hash"),
+        headers=link_result.get("headers") or _alipan_download_headers(),
+        source_profile=(
+            f"alipan-{link_result.get('client_profile', 'desktop')}"
+        ),
+    )
+    return {
+        "success": True,
+        "task_id": task_id,
+        "filename": link_result["name"],
+        "size": link_result.get("size", 0),
+    }
+
+
+@app.post("/api/alipan/download-folder")
+async def alipan_download_folder(data: dict[str, Any] = Body(...)):
+    root_fid = str(data.get("fid", "")).strip()
+    root_name = str(data.get("name", "")).strip()
+    if not root_fid or not root_name:
+        raise HTTPException(422, "阿里云盘文件夹 ID 和名称不能为空")
+    walked = await alipan_client.walk_folder(root_fid)
+    if not walked.get("success"):
+        raise HTTPException(400, walked.get("error", "读取阿里云盘文件夹失败"))
+    task_ids: list[str] = []
+    failures: list[str] = []
+    for file in walked.get("files", []):
+        link_result = await alipan_client.get_download_url(
+            str(file.get("fid", ""))
+        )
+        if not link_result.get("success"):
+            failures.append(str(file.get("name", "未知文件")))
+            continue
+        task_ids.append(
+            await dl_manager.start_download(
+                url=link_result["url"],
+                filename=(
+                    link_result.get("name")
+                    or file.get("name", "download")
+                ),
+                expected_size=(
+                    link_result.get("size")
+                    or file.get("size")
+                ),
+                remote_hash=(
+                    link_result.get("content_hash")
+                    or link_result.get("sha256")
+                ),
+                headers=(
+                    link_result.get("headers")
+                    or _alipan_download_headers()
+                ),
+                source_profile=(
+                    f"alipan-{link_result.get('client_profile', 'desktop')}"
+                ),
+                relative_dir=_folder_relative_dir(
+                    root_name,
+                    str(file.get("relative_dir", "")),
+                ),
+            )
+        )
+    if not task_ids and failures:
+        raise HTTPException(400, "文件夹中的文件均未能获取下载链接")
+    return {
+        "success": True,
+        "task_ids": task_ids,
+        "task_count": len(task_ids),
+        "failed_count": len(failures),
+    }
+
+
+@app.get("/api/alipan/search")
+async def alipan_search(
+    keyword: str = Query(...),
+    page: int = Query(1),
+):
+    result = await alipan_client.search_files(keyword=keyword, page=page)
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "搜索失败"))
+    return result
+
+
+@app.get("/api/alipan/status")
+async def alipan_status():
+    configured = credential_store.status()["alipan"]["configured"]
+    verification: dict[str, Any] = {}
+    if configured and not alipan_client._logged_in:
+        verification = await alipan_client.verify_login()
+    return {
+        "logged_in": bool(
+            alipan_client._logged_in or verification.get("success")
+        ),
+        "username": (
+            alipan_client._username or verification.get("username", "")
+        ),
+        "configured": configured,
+    }
+
+
+def _validated_rename_name(value: Any) -> str:
+    try:
+        return LocalFileManager.validate_name(str(value))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/local/list")
+async def local_list(path: str = Query("/")):
+    try:
+        return local_file_manager.list_files(path)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/local/search")
+async def local_search(keyword: str = Query(...), path: str = Query("/")):
+    try:
+        return local_file_manager.search(keyword, path)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/local/rename")
+async def local_rename(data: dict[str, Any] = Body(...)):
+    try:
+        return local_file_manager.rename(
+            str(data.get("path", "")),
+            _validated_rename_name(data.get("new_name", "")),
+        )
+    except (ValueError, FileNotFoundError, FileExistsError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/local/thumbnail")
+async def local_thumbnail(path: str = Query(...)):
+    try:
+        image_path = local_file_manager.thumbnail_path(path)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(
+        image_path,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@app.post("/api/baidu/rename")
+async def baidu_rename(data: dict[str, Any] = Body(...)):
+    path = str(data.get("path", ""))
+    if not path.startswith("/"):
+        raise HTTPException(422, "百度文件路径无效")
+    result = await baidu_client.rename(path, _validated_rename_name(data.get("new_name", "")))
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "百度重命名失败"))
+    return result
+
+
+@app.post("/api/quark/rename")
+async def quark_rename(data: dict[str, Any] = Body(...)):
+    fid = str(data.get("fid", ""))
+    if not fid:
+        raise HTTPException(422, "夸克文件 ID 无效")
+    result = await quark_client.rename(fid, _validated_rename_name(data.get("new_name", "")))
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "夸克重命名失败"))
+    return result
+
+
+@app.post("/api/alipan/rename")
+async def alipan_rename(data: dict[str, Any] = Body(...)):
+    fid = str(data.get("fid", ""))
+    if not fid:
+        raise HTTPException(422, "阿里云盘文件 ID 无效")
+    result = await alipan_client.rename(fid, _validated_rename_name(data.get("new_name", "")))
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "阿里云盘重命名失败"))
+    return result
+
+
+@app.get("/api/{provider}/thumbnail")
+async def remote_thumbnail(
+    provider: str,
+    key: str = Query(...),
+):
+    clients = {"baidu": baidu_client, "quark": quark_client, "alipan": alipan_client}
+    client = clients.get(provider)
+    if client is None:
+        raise HTTPException(404, "不支持的缩略图来源")
+    result = await client.fetch_thumbnail(key)
+    if not result.get("success"):
+        raise HTTPException(404, result.get("error", "缩略图不存在"))
+    content_type = str(result.get("content_type", "image/jpeg")).split(";", 1)[0]
+    if not content_type.startswith("image/"):
+        content_type = "image/jpeg"
+    return Response(
+        content=result["content"],
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.get("/api/downloads")

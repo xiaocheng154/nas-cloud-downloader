@@ -1,11 +1,11 @@
-import {api, downloadFile} from "./api.js";
+import {api, downloadFile, thumbnailUrl} from "./api.js";
 
 const STARTUP_DURATION_MS = 3500;
 
 const state = {
   view: "baidu",
-  paths: {baidu: "/", quark: "/"},
-  providerStatus: {baidu: null, quark: null},
+  paths: {local: "/", baidu: "/", quark: "/", alipan: "/"},
+  providerStatus: {baidu: null, quark: null, alipan: null},
   settings: null,
   credentials: null,
   downloads: [],
@@ -17,6 +17,9 @@ const state = {
   settingsTab: "credentials",
   downloadTimer: null,
   startupFinished: false,
+  renameTarget: null,
+  alipanQrSession: "",
+  alipanQrTimer: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -174,7 +177,7 @@ async function activateView(view) {
     else button.removeAttribute("aria-current");
   });
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === view));
-  if (view === "baidu" || view === "quark") await loadProvider(view);
+  if (["local", "baidu", "quark", "alipan"].includes(view)) await loadProvider(view);
   if (view === "baidu") showBaiduGuideIfNeeded();
   if (view === "downloads") await refreshDownloads();
   if (view === "settings") {
@@ -223,12 +226,25 @@ function activateSettingsTab(tab) {
 
 async function loadProvider(provider) {
   renderBreadcrumbs(provider, state.paths[provider]);
+  if (provider === "local") {
+    try {
+      state.settings = state.settings || await api.settings();
+      $("#local-root-note").textContent = state.settings?.download_dir || "当前下载目录";
+      await loadFiles(provider, state.paths[provider]);
+    } catch (error) {
+      showProviderEmpty(provider, error.message);
+    }
+    return;
+  }
   try {
     const status = await api.providerStatus(provider);
     state.providerStatus[provider] = status;
     renderProviderStatus(provider, status);
     if (status.logged_in) await loadFiles(provider, state.paths[provider]);
-    else showProviderEmpty(provider, status.configured ? "凭据已保存，当前登录状态需要重新验证" : `请先在设置中配置${provider === "baidu" ? "百度网盘" : "夸克网盘"}凭据`);
+    else {
+      const label = provider === "baidu" ? "百度网盘" : provider === "quark" ? "夸克网盘" : "阿里云盘";
+      showProviderEmpty(provider, status.configured ? "凭据已保存，当前登录状态需要重新验证" : `请先在设置中配置${label}凭据`);
+    }
   } catch (error) {
     showProviderEmpty(provider, error.message);
   }
@@ -290,11 +306,24 @@ function renderBreadcrumbs(provider, path) {
   });
 }
 
-function fileIcon(file) {
+function generatedFileIcon(file) {
   const icon = document.createElement("span");
-  icon.className = `file-icon${file.is_dir ? " folder" : ""}`;
-  icon.textContent = file.is_dir ? "▰" : "▧";
+  icon.className = `file-icon generated-file-icon ${file.is_dir ? "folder" : "document"}`;
   return icon;
+}
+
+function fileIcon(provider, file) {
+  if (!file.has_thumbnail) return generatedFileIcon(file);
+  const image = document.createElement("img");
+  image.className = "file-thumbnail";
+  image.alt = "";
+  image.loading = "lazy";
+  const key = provider === "local" || provider === "baidu"
+    ? file.path
+    : file.fid;
+  image.src = thumbnailUrl(provider, key);
+  image.addEventListener("error", () => image.replaceWith(generatedFileIcon(file)), {once: true});
+  return image;
 }
 
 function renderFiles(provider, files) {
@@ -314,7 +343,7 @@ function renderFiles(provider, files) {
     const nameButton = document.createElement("button");
     nameButton.type = "button";
     nameButton.className = `file-name-button${file.is_dir ? " is-folder" : ""}`;
-    nameButton.append(fileIcon(file));
+    nameButton.append(fileIcon(provider, file));
     const name = document.createElement("span");
     name.textContent = file.name;
     nameButton.append(name);
@@ -329,15 +358,65 @@ function renderFiles(provider, files) {
     modified.textContent = formatTime(file.mtime);
     const action = document.createElement("td");
     action.className = "file-action-cell";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "button download-button";
-    button.textContent = file.is_dir ? "下载文件夹" : "下载";
-    button.addEventListener("click", () => addDownload(provider, file));
-    action.append(button);
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "file-operation rename-operation";
+    renameButton.title = `重命名 ${file.name}`;
+    renameButton.setAttribute("aria-label", `重命名 ${file.name}`);
+    const renameIcon = document.createElement("span");
+    renameIcon.className = "rename-operation-icon";
+    renameIcon.setAttribute("aria-hidden", "true");
+    renameButton.append(renameIcon);
+    renameButton.addEventListener("click", () => openRenameDialog(provider, file));
+    action.append(renameButton);
+    if (provider !== "local") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button download-button";
+      button.textContent = file.is_dir ? "下载文件夹" : "下载";
+      button.addEventListener("click", () => addDownload(provider, file));
+      action.append(button);
+    }
     row.append(nameCell, size, modified, action);
     body.append(row);
   });
+}
+
+function openRenameDialog(provider, file) {
+  state.renameTarget = {provider, file};
+  $("#rename-current-name").textContent = `当前名称：${file.name}`;
+  $("#rename-input").value = file.name;
+  $("#rename-dialog").classList.remove("is-hidden");
+  window.setTimeout(() => {
+    const input = $("#rename-input");
+    input.focus();
+    const dot = file.is_dir ? -1 : file.name.lastIndexOf(".");
+    input.setSelectionRange(0, dot > 0 ? dot : file.name.length);
+  }, 0);
+}
+
+function closeRenameDialog() {
+  state.renameTarget = null;
+  $("#rename-dialog").classList.add("is-hidden");
+}
+
+async function submitRename(event) {
+  event.preventDefault();
+  const target = state.renameTarget;
+  if (!target) return;
+  const newName = $("#rename-input").value.trim();
+  const {provider, file} = target;
+  const payload = provider === "local" || provider === "baidu"
+    ? {path: file.path, new_name: newName}
+    : {fid: file.fid, new_name: newName};
+  try {
+    await api.rename(provider, payload);
+    closeRenameDialog();
+    toast(`已重命名为：${newName}`);
+    await loadFiles(provider, state.paths[provider]);
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 async function searchFiles(provider) {
@@ -405,7 +484,7 @@ function renderDownloads() {
   const completed = tasks.filter((task) => task.status === "completed").length;
   const total = tasks.filter((task) => task.status === "completed").reduce((sum, task) => sum + Number(task.total_size || 0), 0);
   $("#download-count").textContent = String(active);
-  ["baidu", "quark"].forEach((provider) => {
+  ["baidu", "quark", "alipan"].forEach((provider) => {
     $(`#${provider}-active`).textContent = String(active);
     $(`#${provider}-completed`).textContent = String(completed);
     $(`#${provider}-total`).textContent = formatSize(total);
@@ -443,6 +522,8 @@ function renderDownloads() {
     if (task.baidu_app_id_used) transfer.push(`百度 app_id ${task.baidu_app_id_used}`);
     if (task.source_profile === "quark-desktop") transfer.push("夸克 PC 身份");
     if (task.source_profile === "quark-web") transfer.push("网页回退");
+    if (task.source_profile === "alipan-openapi") transfer.push("阿里云盘 OpenAPI");
+    if (task.source_profile === "alipan-private") transfer.push("阿里云盘网页兼容通道");
     if (task.eta_seconds != null && task.status === "downloading") {
       transfer.push(`预计剩余 ${formatDuration(task.eta_seconds)}`);
     }
@@ -490,7 +571,7 @@ async function loadCredentials() {
 
 function renderCredentialStates() {
   if (!state.credentials) return;
-  ["baidu", "quark"].forEach((provider) => {
+  ["baidu", "quark", "alipan"].forEach((provider) => {
     const element = $(`#${provider}-credential-state`);
     const configured = Boolean(state.credentials[provider]?.configured);
     element.textContent = configured ? "已配置" : "未配置";
@@ -530,6 +611,7 @@ function settingsPayload() {
     aria2_rpc_url: form.elements.aria2_rpc_url?.value || "",
     aria2_secret: form.elements.aria2_secret?.value || "",
     baidu_app_id: Number(form.elements.baidu_app_id?.value || 250528),
+    alipan_auth_mode: form.elements.alipan_auth_mode?.value || "refresh_token",
   };
 }
 
@@ -600,6 +682,27 @@ function updateCredentialDetection(provider, commit = false) {
 
 async function saveCredential(provider) {
   const form = $("#settings-form");
+  if (provider === "alipan") {
+    const payload = {
+      refresh_token: form.elements.alipan_refresh_token.value.trim(),
+      client_id: form.elements.alipan_client_id?.value.trim() || "",
+      client_secret: form.elements.alipan_client_secret?.value.trim() || "",
+      device_id: form.elements.alipan_device_id?.value.trim() || "",
+      signature: form.elements.alipan_signature?.value.trim() || "",
+    };
+    try {
+      state.credentials = await api.saveCredential(provider, payload);
+      form.elements.alipan_refresh_token.value = "";
+      form.elements.alipan_client_secret.value = "";
+      form.elements.alipan_signature.value = "";
+      renderCredentialStates();
+      toast("阿里云盘凭据已验证并安全保存");
+      await loadProvider(provider);
+    } catch (error) {
+      toast(error.message, true);
+    }
+    return;
+  }
   const inputName = provider === "baidu" ? "baidu_cookie" : "quark_cookie";
   const cleaned = provider === "baidu"
     ? extractBaiduCookie(form.elements[inputName].value)
@@ -618,8 +721,66 @@ async function saveCredential(provider) {
   }
 }
 
+function clearAlipanQrTimer() {
+  if (state.alipanQrTimer) window.clearTimeout(state.alipanQrTimer);
+  state.alipanQrTimer = null;
+}
+
+async function closeAlipanQrDialog(cancelRemote = true) {
+  clearAlipanQrTimer();
+  const sessionId = state.alipanQrSession;
+  state.alipanQrSession = "";
+  $("#alipan-qr-dialog").classList.add("is-hidden");
+  $("#alipan-qr-image").removeAttribute("src");
+  if (cancelRemote && sessionId) {
+    try { await api.cancelAlipanQr(sessionId); } catch (_) { /* 会话会自动过期 */ }
+  }
+}
+
+async function pollAlipanQr() {
+  const sessionId = state.alipanQrSession;
+  if (!sessionId) return;
+  try {
+    const result = await api.alipanQrStatus(sessionId);
+    if (sessionId !== state.alipanQrSession) return;
+    $("#alipan-qr-status").textContent = result.message || "等待扫码";
+    if (result.status === "confirmed") {
+      await closeAlipanQrDialog(false);
+      await Promise.all([loadSettings(), loadCredentials()]);
+      fillSettingsForm();
+      toast(`阿里云盘扫码登录成功${result.username ? `：${result.username}` : ""}`);
+      await loadProvider("alipan");
+      return;
+    }
+    if (["expired", "cancelled"].includes(result.status)) {
+      clearAlipanQrTimer();
+      return;
+    }
+    state.alipanQrTimer = window.setTimeout(pollAlipanQr, 2000);
+  } catch (error) {
+    clearAlipanQrTimer();
+    $("#alipan-qr-status").textContent = error.message;
+  }
+}
+
+async function startAlipanQr() {
+  await closeAlipanQrDialog();
+  $("#alipan-qr-dialog").classList.remove("is-hidden");
+  $("#alipan-qr-status").textContent = "正在生成二维码";
+  try {
+    const result = await api.startAlipanQr();
+    state.alipanQrSession = result.session_id;
+    $("#alipan-qr-image").src = `/api/alipan/qr/${encodeURIComponent(result.session_id)}.svg`;
+    $("#alipan-qr-status").textContent = "等待扫码";
+    state.alipanQrTimer = window.setTimeout(pollAlipanQr, 1200);
+  } catch (error) {
+    $("#alipan-qr-status").textContent = error.message;
+  }
+}
+
 async function clearCredential(provider) {
-  if (!window.confirm(`确定清除${provider === "baidu" ? "百度网盘" : "夸克网盘"}凭据？`)) return;
+  const names = {baidu: "百度网盘", quark: "夸克网盘", alipan: "阿里云盘"};
+  if (!window.confirm(`确定清除${names[provider] || provider}凭据？`)) return;
   try {
     state.credentials = await api.clearCredential(provider);
     renderCredentialStates();
@@ -696,16 +857,32 @@ function bindEvents() {
     $("#baidu-guide").classList.add("is-hidden");
   });
   $("#baidu-guide-complete").addEventListener("click", () => completeBaiduGuide(true));
-  ["baidu", "quark"].forEach((provider) => {
+  ["local", "baidu", "quark", "alipan"].forEach((provider) => {
     $(`#${provider}-refresh`).addEventListener("click", () => loadFiles(provider, state.paths[provider]));
     $(`#${provider}-search`).addEventListener("keydown", (event) => { if (event.key === "Enter") searchFiles(provider); });
-    $(`#${provider}-account`).addEventListener("click", () => activateView("settings"));
+    if (provider !== "local") $(`#${provider}-account`).addEventListener("click", () => activateView("settings"));
+  });
+  $("#rename-form").addEventListener("submit", submitRename);
+  $("#rename-cancel").addEventListener("click", closeRenameDialog);
+  $("#rename-dialog").addEventListener("click", (event) => {
+    if (event.target.id === "rename-dialog") closeRenameDialog();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#rename-dialog").classList.contains("is-hidden")) closeRenameDialog();
+    if (event.key === "Escape" && !$("#alipan-qr-dialog").classList.contains("is-hidden")) closeAlipanQrDialog();
   });
   $("#clear-downloads").addEventListener("click", async () => { await api.clearDownloads(); await refreshDownloads(); });
   $("#settings-form").addEventListener("submit", saveSettings);
   $("#cancel-settings").addEventListener("click", fillSettingsForm);
   $("#save-baidu-credential").addEventListener("click", () => saveCredential("baidu"));
   $("#save-quark-credential").addEventListener("click", () => saveCredential("quark"));
+  $("#save-alipan-credential").addEventListener("click", () => saveCredential("alipan"));
+  $("#alipan-qr-login").addEventListener("click", startAlipanQr);
+  $("#alipan-qr-refresh").addEventListener("click", startAlipanQr);
+  $("#alipan-qr-cancel").addEventListener("click", () => closeAlipanQrDialog());
+  $("#alipan-qr-dialog").addEventListener("click", (event) => {
+    if (event.target.id === "alipan-qr-dialog") closeAlipanQrDialog();
+  });
   [["baidu", "baidu_cookie"], ["quark", "quark_cookie"]].forEach(([provider, name]) => {
     const input = $("#settings-form").elements[name];
     input.addEventListener("input", () => updateCredentialDetection(provider));
@@ -713,6 +890,7 @@ function bindEvents() {
   });
   $("#clear-baidu-credential").addEventListener("click", () => clearCredential("baidu"));
   $("#clear-quark-credential").addEventListener("click", () => clearCredential("quark"));
+  $("#clear-alipan-credential").addEventListener("click", () => clearCredential("alipan"));
   $("#refresh-logs").addEventListener("click", refreshLogs);
   $("#download-logs").addEventListener("click", () => downloadFile("/api/logs/download"));
   $("#clear-logs").addEventListener("click", async () => {

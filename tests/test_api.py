@@ -513,6 +513,82 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(export.headers["content-type"], "application/zip")
         self.assertGreater(len(export.content), 100)
 
+    def test_local_files_can_be_listed_renamed_and_previewed(self) -> None:
+        self.accept_disclaimer()
+        image = self.download_dir / "旧照片.png"
+        image.write_bytes(b"not-a-real-png")
+
+        listed = self.client.get("/api/local/list?path=/")
+        self.assertEqual(listed.status_code, 200)
+        self.assertTrue(listed.json()["files"][0]["has_thumbnail"])
+
+        renamed = self.client.post(
+            "/api/local/rename",
+            json={"path": "/旧照片.png", "new_name": "新照片.png"},
+        )
+        self.assertEqual(renamed.status_code, 200)
+        self.assertTrue((self.download_dir / "新照片.png").exists())
+
+        thumbnail = self.client.get("/api/local/thumbnail?path=/新照片.png")
+        self.assertEqual(thumbnail.status_code, 200)
+        self.assertEqual(thumbnail.content, b"not-a-real-png")
+
+    def test_local_file_api_rejects_path_traversal(self) -> None:
+        self.accept_disclaimer()
+        response = self.client.get("/api/local/list?path=/../../")
+        self.assertEqual(response.status_code, 400)
+
+    def test_remote_rename_routes_validate_and_delegate(self) -> None:
+        self.accept_disclaimer()
+        self.module.baidu_client.rename = AsyncMock(
+            return_value={"success": True, "name": "新名称.txt"}
+        )
+        response = self.client.post(
+            "/api/baidu/rename",
+            json={"path": "/旧名称.txt", "new_name": "新名称.txt"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.module.baidu_client.rename.assert_awaited_once_with(
+            "/旧名称.txt", "新名称.txt"
+        )
+
+        invalid = self.client.post(
+            "/api/quark/rename",
+            json={"fid": "fid", "new_name": "../越界"},
+        )
+        self.assertEqual(invalid.status_code, 422)
+
+    def test_alipan_qr_routes_never_return_refresh_token(self) -> None:
+        self.accept_disclaimer()
+        self.module.alipan_qr_manager.start = AsyncMock(
+            return_value={"success": True, "session_id": "qr-session", "expires_in": 300}
+        )
+        self.module.alipan_qr_manager.image = AsyncMock(return_value=b"<svg></svg>")
+        self.module.alipan_qr_manager.poll = AsyncMock(
+            return_value={
+                "success": True,
+                "status": "confirmed",
+                "message": "扫码登录成功",
+                "refresh_token": "secret-refresh-token",
+            }
+        )
+        with patch.object(
+            self.module,
+            "_replace_alipan",
+            new=AsyncMock(return_value={"success": True, "username": "扫码账号"}),
+        ) as replace:
+            started = self.client.post("/api/alipan/qr/start")
+            image = self.client.get("/api/alipan/qr/qr-session.svg")
+            status = self.client.get("/api/alipan/qr/qr-session/status")
+
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(image.headers["content-type"], "image/svg+xml")
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["logged_in"])
+        self.assertNotIn("secret-refresh-token", status.text)
+        replace.assert_awaited_once()
+        self.assertEqual(replace.await_args.kwargs["auth_mode_override"], "refresh_token")
+
     def test_root_is_available_before_onboarding(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)

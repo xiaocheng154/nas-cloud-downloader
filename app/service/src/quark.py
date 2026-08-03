@@ -48,6 +48,7 @@ class QuarkPanClient:
         self._logged_in = False
         self._username = ""
         self._download_user_agent = QUARK_DESKTOP_USER_AGENT
+        self._thumbnail_urls: dict[str, str] = {}
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -215,15 +216,24 @@ class QuarkPanClient:
             }
         return {"success": True, "payload": payload}
 
-    @staticmethod
-    def _file_entry(item: dict[str, Any]) -> dict[str, Any]:
+    def _file_entry(self, item: dict[str, Any]) -> dict[str, Any]:
         is_dir = bool(item.get("dir")) or item.get("file_type", 0) == 0
+        fid = str(item.get("fid", ""))
+        thumbnail_url = str(
+            item.get("thumbnail")
+            or item.get("big_thumbnail")
+            or item.get("small_thumbnail")
+            or ""
+        )
+        if fid and thumbnail_url:
+            self._thumbnail_urls[fid] = thumbnail_url
         return {
             "name": item.get("file_name", ""),
-            "fid": item.get("fid", ""),
+            "fid": fid,
             "is_dir": is_dir,
             "size": item.get("size", 0),
             "mtime": item.get("updated_at", 0),
+            "has_thumbnail": bool(thumbnail_url),
         }
 
     async def list_files(
@@ -502,3 +512,41 @@ class QuarkPanClient:
             return {"success": False, "error": "无法连接夸克搜索接口"}
         except Exception:
             return {"success": False, "error": "搜索夸克文件失败"}
+
+    async def rename(self, fid: str, new_name: str) -> dict[str, Any]:
+        if not self._logged_in:
+            verified = await self.verify_login()
+            if not verified.get("success"):
+                return verified
+        try:
+            response = await self._get_client().post(
+                f"{DRIVE_API}/file/rename",
+                params=COMMON_PARAMS,
+                json={"fid": fid, "file_name": new_name},
+            )
+            payload, error = self._json_response(response, "重命名")
+            if error:
+                return {"success": False, "error": error}
+            assert payload is not None
+            if not self._success(payload):
+                return {"success": False, "error": self._message(payload, "重命名失败")}
+            self._thumbnail_urls.pop(fid, None)
+            return {"success": True, "name": new_name}
+        except httpx.HTTPError:
+            return {"success": False, "error": "夸克重命名请求失败"}
+
+    async def fetch_thumbnail(self, fid: str) -> dict[str, Any]:
+        url = self._thumbnail_urls.get(fid, "")
+        if not url:
+            return {"success": False, "error": "缩略图不存在"}
+        try:
+            response = await self._get_client().get(url)
+            if response.status_code != 200 or len(response.content) > 8 * 1024 * 1024:
+                return {"success": False, "error": "缩略图读取失败"}
+            return {
+                "success": True,
+                "content": response.content,
+                "content_type": response.headers.get("content-type", "image/jpeg"),
+            }
+        except httpx.HTTPError:
+            return {"success": False, "error": "缩略图读取失败"}
