@@ -1,1 +1,9 @@
-{}
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "clouddl/downloads"
+            }
+        ]
+    }
+}

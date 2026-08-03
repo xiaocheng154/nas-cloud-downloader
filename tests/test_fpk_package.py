@@ -235,11 +235,14 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.5.0")
+        self.assertEqual(manifest["version"], "1.5.1")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
         self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
         self.assertEqual(manifest["platform"], EXPECTED_PLATFORM)
+        self.assertEqual(manifest["service_port"], "8686")
+        self.assertEqual(manifest["ctl_stop"], "true")
+        self.assertEqual(manifest["checkport"], "true")
 
     def test_json_metadata_is_valid_and_consistent(self) -> None:
         privilege = json.loads(self.read_outer("config/privilege"))
@@ -248,8 +251,21 @@ class FpkPackageTests(unittest.TestCase):
         ui = json.loads(self.read_app("ui/config"))
 
         self.assertEqual(privilege["defaults"]["run-as"], "root")
-        self.assertEqual(resource, {})
+        self.assertEqual(privilege["username"], "clouddl")
+        self.assertEqual(privilege["groupname"], "clouddl")
+        self.assertEqual(
+            resource["data-share"]["shares"][0]["name"],
+            "clouddl/downloads",
+        )
         self.assertIsInstance(wizard[1]["items"][0]["rules"], list)
+        self.assertEqual(
+            wizard[1]["items"][0]["field"],
+            "wizard_download_dir",
+        )
+        self.assertEqual(
+            wizard[1]["items"][0]["initValue"],
+            "/vol1/downloads",
+        )
         self.assertIn("clouddl.Application", ui[".url"])
 
     def test_package_contains_no_docker_runtime_definition(self) -> None:
@@ -347,10 +363,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.5.0", source_manifest)
+        self.assertIn("version = 1.5.1", source_manifest)
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
-        self.assertIn('APP_VERSION = "1.5.0"', source_app)
+        self.assertIn('APP_VERSION = "1.5.1"', source_app)
 
 
 if __name__ == "__main__":

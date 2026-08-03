@@ -13,9 +13,9 @@
         "items": [
             {
                 "type": "text",
-                "field": "download_dir",
+                "field": "wizard_download_dir",
                 "label": "下载保存目录",
-                "initValue": "/volume1/downloads",
+                "initValue": "/vol1/downloads",
                 "rules": [
                     {
                         "required": true,
