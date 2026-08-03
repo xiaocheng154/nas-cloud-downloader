@@ -757,7 +757,81 @@ class NestedDirectoryDownloadTests(unittest.IsolatedAsyncioTestCase):
             ]
             self.assertEqual(requested_ranges, ["bytes=0-3", "bytes=2-3"])
 
-    async def test_baidu_download_allows_up_to_sixteen_connections(self) -> None:
+    async def test_baidu_range_disconnect_splits_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=SettingsStore(root / "config"),
+            )
+            manager._reload_semaphore()
+            manager._rate_limiter.consume = AsyncMock()
+            temporary = root / "download.part"
+            temporary.touch()
+            half = 512 * 1024
+
+            async def disconnected(_size):
+                raise httpx.RemoteProtocolError("connection interrupted")
+                yield b""
+
+            async def left_chunks(_size):
+                yield b"a" * half
+
+            async def right_chunks(_size):
+                yield b"b" * half
+
+            responses = []
+            for chunks in (disconnected, left_chunks, right_chunks):
+                response = MagicMock(status_code=206)
+                response.aiter_bytes = chunks
+                context = MagicMock()
+                context.__aenter__ = AsyncMock(return_value=response)
+                context.__aexit__ = AsyncMock(return_value=False)
+                responses.append(context)
+            client = MagicMock()
+            client.stream.side_effect = responses
+            task = {
+                "id": "baidu-test",
+                "provider": "baidu",
+                "total_size": half * 2,
+                "downloaded": 0,
+                "speed": 0.0,
+                "connections_used": 1,
+            }
+
+            with patch.object(
+                manager_module.asyncio, "sleep", new=AsyncMock()
+            ):
+                await manager._stream_range_to_file(
+                    task,
+                    client,
+                    "https://download.example/file",
+                    temporary,
+                    0,
+                    half * 2 - 1,
+                    asyncio.Lock(),
+                    time.monotonic(),
+                    half * 2,
+                )
+
+            self.assertEqual(temporary.stat().st_size, half * 2)
+            self.assertEqual(temporary.read_bytes()[:1], b"a")
+            self.assertEqual(temporary.read_bytes()[-1:], b"b")
+            requested_ranges = [
+                call.kwargs["headers"]["Range"]
+                for call in client.stream.call_args_list
+            ]
+            self.assertEqual(
+                requested_ranges,
+                [
+                    f"bytes=0-{half * 2 - 1}",
+                    f"bytes=0-{half - 1}",
+                    f"bytes={half}-{half * 2 - 1}",
+                ],
+            )
+
+    async def test_baidu_download_caps_connections_at_six(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             manager_module = __import__("downloader")
@@ -785,7 +859,7 @@ class NestedDirectoryDownloadTests(unittest.IsolatedAsyncioTestCase):
                 16,
             )
 
-            self.assertEqual(task["connections_used"], 16)
+            self.assertEqual(task["connections_used"], 6)
 
     async def test_alipan_openapi_uses_configured_connections(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

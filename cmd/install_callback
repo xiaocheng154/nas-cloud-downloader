@@ -4,9 +4,6 @@ DOWNLOAD_DIR="${wizard_download_dir:-}"
 CONFIG_DIR="${TRIM_PKGVAR}/config"
 DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"
 
-if [ -z "$DOWNLOAD_DIR" ] && [ -n "${TRIM_DATA_SHARE_PATHS:-}" ]; then
-    DOWNLOAD_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
-fi
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-${TRIM_PKGVAR}/downloads}"
 
 case "$DOWNLOAD_DIR" in

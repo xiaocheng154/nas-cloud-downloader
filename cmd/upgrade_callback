@@ -1,4 +1,18 @@
 #!/bin/bash
 
-# 升级完成后由 fnOS 调用。
+DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"
+
+if [ -r "$DOWNLOAD_FILE" ]; then
+    configured_dir=$(head -n 1 "$DOWNLOAD_FILE" | tr -d '\r\n')
+    case "$configured_dir" in
+    */@appshare/clouddl/downloads)
+        fallback_dir="${TRIM_PKGVAR}/downloads"
+        if mkdir -p "$fallback_dir"; then
+            printf '%s\n' "$fallback_dir" > "$DOWNLOAD_FILE"
+            chmod 600 "$DOWNLOAD_FILE"
+        fi
+        ;;
+    esac
+fi
+
 exit 0

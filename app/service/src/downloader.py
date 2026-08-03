@@ -26,6 +26,9 @@ MIN_PROTOCOL_SPLIT_SIZE = MIB
 PROBE_RANGE_END = 1023
 TERMINAL_STATES = {"completed", "skipped", "error", "cancelled"}
 MAX_SIGNED_URL_REFRESHES = 3
+BAIDU_MAX_CONNECTIONS = 6
+BAIDU_SEGMENT_SIZE = 4 * MIB
+BAIDU_STREAM_CHUNK_SIZE = 64 * 1024
 
 
 def _resume_state_path(temporary: Path) -> Path:
@@ -888,6 +891,13 @@ class DownloadManager:
                         num_threads,
                     )
                 except (httpx.HTTPError, IOError) as exc:
+                    if _task_provider(task) == "baidu":
+                        LOGGER.warning(
+                            "File %s: provider=baidu range retries exhausted; "
+                            "preserving partial file instead of stream fallback",
+                            os.path.basename(str(temporary)),
+                        )
+                        raise
                     reason = f"分片连接失败：{type(exc).__name__}"
                     LOGGER.warning(
                         "File %s: range download failed, fallback to stream: %s",
@@ -1059,8 +1069,9 @@ class DownloadManager:
             segment_size = max(segment_size, 10 * MIB)
         elif total < 100 * MIB:  # < 100MB
             segment_size = min(segment_size, MIB)
-        if task.get("baidu_app_id_used"):
-            connections = min(connections, 16)
+        if _task_provider(task) == "baidu":
+            connections = min(connections, BAIDU_MAX_CONNECTIONS)
+            segment_size = min(segment_size, BAIDU_SEGMENT_SIZE)
         if str(task.get("source_profile", "")).startswith("quark-"):
             connections = min(connections, 8)
             segment_size = 10 * MIB
@@ -1174,10 +1185,15 @@ class DownloadManager:
     ) -> None:
         position = start
         last_error: Exception | None = None
+        provider = _task_provider(task)
         attempts = (
             1
-            if task.get("provider") == "quark" and callable(task.get("_url_refresher"))
+            if provider == "baidu"
+            or (provider == "quark" and callable(task.get("_url_refresher")))
             else 3
+        )
+        stream_chunk_size = (
+            BAIDU_STREAM_CHUNK_SIZE if provider == "baidu" else 256 * 1024
         )
         for attempt in range(attempts):
             if position > end:
@@ -1200,7 +1216,7 @@ class DownloadManager:
                         with temporary.open("r+b", buffering=0) as handle:
                             handle.seek(position)
                             async for chunk in response.aiter_bytes(
-                                256 * 1024
+                                stream_chunk_size
                             ):
                                 if not chunk:
                                     continue
@@ -1238,6 +1254,24 @@ class DownloadManager:
                 )
                 if attempt < attempts - 1:
                     await asyncio.sleep(2**attempt)
+        remaining = end - position + 1
+        if _task_provider(task) == "baidu" and remaining > MIN_RANGE_SEGMENT:
+            midpoint = position + remaining // 2 - 1
+            LOGGER.warning(
+                "Baidu range adaptive split: task=%s bytes=%d-%d -> "
+                "bytes=%d-%d + bytes=%d-%d",
+                task.get("id", "unknown"),
+                position, end, position, midpoint, midpoint + 1, end,
+            )
+            await self._stream_range_to_file(
+                task, client, url, temporary, position, midpoint,
+                progress_lock, started, total,
+            )
+            await self._stream_range_to_file(
+                task, client, url, temporary, midpoint + 1, end,
+                progress_lock, started, total,
+            )
+            return
         raise IOError(f"分片下载失败：{last_error}")
 
     async def _fetch_range(

@@ -210,10 +210,17 @@ class FpkPackageTests(unittest.TestCase):
         callback = self.read_outer("cmd/install_callback").decode("utf-8")
         self.assertIn("TRIM_PKGVAR", callback)
         self.assertIn("wizard_download_dir", callback)
+        self.assertNotIn("TRIM_DATA_SHARE_PATHS", callback)
         self.assertIn('DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"', callback)
         self.assertIn('"$TRIM_APPDEST/runtime/python/bin/python3"', callback)
         self.assertIn("chmod 755", callback)
         self.assertNotIn("docker", callback.lower())
+
+    def test_upgrade_migrates_broken_appshare_download_directory(self) -> None:
+        callback = self.read_outer("cmd/upgrade_callback").decode("utf-8")
+        self.assertIn("/@appshare/clouddl/downloads", callback)
+        self.assertIn('${TRIM_PKGVAR}/downloads', callback)
+        self.assertIn('DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"', callback)
 
     def test_uninstall_removes_first_use_guide_state(self) -> None:
         callback = (PROJECT_ROOT / "cmd" / "uninstall_callback").read_text(
@@ -235,7 +242,7 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.5.1")
+        self.assertEqual(manifest["version"], "1.5.2")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
         self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
@@ -363,10 +370,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.5.1", source_manifest)
+        self.assertIn("version = 1.5.2", source_manifest)
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
-        self.assertIn('APP_VERSION = "1.5.1"', source_app)
+        self.assertIn('APP_VERSION = "1.5.2"', source_app)
 
 
 if __name__ == "__main__":
