@@ -484,6 +484,7 @@ async def baidu_download(fs_id: int, path: str = Query("")):
         expected_size=item.get("size"),
         remote_hash=item.get("md5") or item.get("sha256"),
         headers=_baidu_download_headers(),
+        source_profile="baidu-pcs",
         baidu_app_id_used=link_result.get("app_id_used"),
     )
     return {
@@ -527,6 +528,7 @@ async def baidu_download_folder(data: dict[str, Any] = Body(...)):
                 expected_size=item.get("size") or file.get("size"),
                 remote_hash=item.get("md5") or item.get("sha256"),
                 headers=_baidu_download_headers(),
+                source_profile="baidu-pcs",
                 relative_dir=_folder_relative_dir(
                     root_name,
                     str(file.get("relative_dir", "")),
@@ -623,6 +625,7 @@ async def quark_download(fid: str):
         source_profile=(
             f"quark-{link_result.get('client_profile', 'web')}"
         ),
+        url_refresher=lambda: quark_client.get_download_url(fid),
     )
     return {
         "success": True,
@@ -644,9 +647,8 @@ async def quark_download_folder(data: dict[str, Any] = Body(...)):
     task_ids: list[str] = []
     failures: list[str] = []
     for file in walked.get("files", []):
-        link_result = await quark_client.get_download_url(
-            str(file.get("fid", ""))
-        )
+        file_fid = str(file.get("fid", ""))
+        link_result = await quark_client.get_download_url(file_fid)
         if not link_result.get("success"):
             failures.append(str(file.get("name", "未知文件")))
             continue
@@ -671,6 +673,11 @@ async def quark_download_folder(data: dict[str, Any] = Body(...)):
                 ),
                 source_profile=(
                     f"quark-{link_result.get('client_profile', 'web')}"
+                ),
+                url_refresher=(
+                    lambda refresh_fid=file_fid: quark_client.get_download_url(
+                        refresh_fid
+                    )
                 ),
                 relative_dir=_folder_relative_dir(
                     root_name,

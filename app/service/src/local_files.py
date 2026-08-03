@@ -10,6 +10,18 @@ IMAGE_EXTENSIONS = {
 }
 
 
+def _is_internal_download_file(path: Path) -> bool:
+    name = path.name
+    return (
+        name.startswith(".")
+        and (
+            name.endswith(".clouddl.part")
+            or name.endswith(".clouddl.part.resume.json")
+            or name.endswith(".clouddl.part.aria2")
+        )
+    )
+
+
 class LocalFileManager:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
@@ -60,6 +72,8 @@ class LocalFileManager:
         except OSError as exc:
             raise ValueError(f"无法读取目录：{exc}") from exc
         for child in children:
+            if _is_internal_download_file(child):
+                continue
             try:
                 items.append(self._entry(child))
             except OSError:
@@ -71,6 +85,8 @@ class LocalFileManager:
         query = keyword.casefold()
         files: list[dict[str, Any]] = []
         for child in directory.rglob("*"):
+            if _is_internal_download_file(child):
+                continue
             if query not in child.name.casefold():
                 continue
             try:

@@ -446,6 +446,173 @@ class NestedDirectoryDownloadTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(task["range_supported"])
             self.assertEqual(task["degradation_reason"], "")
 
+    async def test_quark_refreshes_signed_url_and_keeps_resume_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=SettingsStore(root / "config"),
+            )
+            client = MagicMock()
+            context = MagicMock()
+            context.__aenter__ = AsyncMock(return_value=client)
+            context.__aexit__ = AsyncMock(return_value=False)
+            manager._download_ranges = AsyncMock(
+                side_effect=[IOError("signed URL expired"), None]
+            )
+            refresher = AsyncMock(
+                return_value={
+                    "success": True,
+                    "url": "https://download.example/refreshed",
+                    "headers": {"User-Agent": "quark-refreshed"},
+                }
+            )
+            task = {
+                "id": "task-1",
+                "provider": "quark",
+                "total_size": 100,
+                "downloaded": 40,
+                "source_profile": "quark-desktop",
+                "url_refresh_count": 0,
+                "_url_refresher": refresher,
+            }
+
+            with patch.object(
+                manager_module.httpx,
+                "AsyncClient",
+                return_value=context,
+            ):
+                await manager._download(
+                    task,
+                    "https://download.example/expired",
+                    {},
+                    root / "download.part",
+                    None,
+                )
+
+            refresher.assert_awaited_once()
+            requested_urls = [
+                call.args[2] for call in manager._download_ranges.await_args_list
+            ]
+            self.assertEqual(
+                requested_urls,
+                [
+                    "https://download.example/expired",
+                    "https://download.example/refreshed",
+                ],
+            )
+            self.assertEqual(task["url_refresh_count"], 1)
+            client.headers.update.assert_called_once()
+
+    async def test_range_state_resumes_only_missing_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            settings = SettingsStore(root / "config")
+            settings.update({"segment_size_mb": 1, "connections_per_file": 2})
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=settings,
+            )
+            manager._wait_until_allowed = AsyncMock()
+            temporary = root / "download.part"
+            one_mib = manager_module.MIB
+            total = 2 * one_mib
+            with temporary.open("wb") as handle:
+                handle.seek(one_mib - 1)
+                handle.write(b"\0")
+            manager_module._write_resume_state(
+                temporary,
+                total=total,
+                remote_hash="hash-1",
+                completed={(0, one_mib - 1)},
+            )
+
+            async def write_missing(
+                _task, _client, _url, path, start, end, *_args
+            ):
+                with path.open("r+b") as handle:
+                    handle.seek(end)
+                    handle.write(b"\0")
+
+            manager._stream_range_to_file = AsyncMock(side_effect=write_missing)
+            task = {
+                "id": "task-2",
+                "provider": "quark",
+                "total_size": total,
+                "downloaded": 0,
+                "speed": 0.0,
+                "source_profile": "quark-desktop",
+                "_remote_hash": "hash-1",
+            }
+
+            await manager._download_ranges(
+                task,
+                MagicMock(),
+                "https://download.example/file",
+                temporary,
+                total,
+                2,
+            )
+
+            manager._stream_range_to_file.assert_awaited_once()
+            call = manager._stream_range_to_file.await_args
+            self.assertEqual(call.args[4:6], (one_mib, total - 1))
+            self.assertEqual(task["resumed_bytes"], one_mib)
+            self.assertEqual(task["downloaded"], total)
+
+    async def test_stream_download_resumes_existing_part_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root / "downloads",
+                settings_store=SettingsStore(root / "config"),
+            )
+            manager._wait_until_allowed = AsyncMock()
+            manager._rate_limiter.consume = AsyncMock()
+            temporary = root / "download.part"
+            temporary.write_bytes(b"ab")
+            response = MagicMock(
+                status_code=206,
+                headers={"content-range": "bytes 2-3/4", "content-length": "2"},
+            )
+            response.raise_for_status = MagicMock()
+
+            async def chunks(_size):
+                yield b"cd"
+
+            response.aiter_bytes = chunks
+            context = MagicMock()
+            context.__aenter__ = AsyncMock(return_value=response)
+            context.__aexit__ = AsyncMock(return_value=False)
+            client = MagicMock()
+            client.stream.return_value = context
+            task = {
+                "id": "task-3",
+                "provider": "direct",
+                "total_size": 4,
+                "downloaded": 0,
+                "speed": 0.0,
+                "connections_used": 1,
+            }
+
+            await manager._download_stream(
+                task,
+                client,
+                "https://download.example/file",
+                temporary,
+                4,
+            )
+
+            self.assertEqual(temporary.read_bytes(), b"abcd")
+            self.assertEqual(task["resumed_bytes"], 2)
+            self.assertEqual(
+                client.stream.call_args.kwargs["headers"]["Range"],
+                "bytes=2-",
+            )
+
     async def test_connections_used_is_the_actual_worker_count(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -759,7 +926,8 @@ class Aria2DownloadTests(unittest.IsolatedAsyncioTestCase):
             options = aria2.add_uri.await_args.args[1]
             self.assertEqual(options["split"], "16")
             self.assertEqual(options["min-split-size"], "5M")
-            self.assertEqual(options["out"], f"example.bin.{task_id}.part")
+            self.assertEqual(options["out"], ".example.bin.clouddl.part")
+            self.assertEqual(options["continue"], "true")
             self.assertIn("Referer: https://pan.example/", options["header"])
             self.assertEqual(manager.tasks[task_id]["backend"], "aria2")
             manager.cancel_download(task_id)

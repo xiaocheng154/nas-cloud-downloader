@@ -81,6 +81,12 @@ class StaticUiTests(unittest.TestCase):
         self.assertIn("pollAlipanQr", script)
         self.assertIn("/api/alipan/qr/start", api)
 
+    def test_download_cards_expose_resume_and_url_refresh_diagnostics(self) -> None:
+        script = self.read("app.js")
+        self.assertIn("resumed_bytes", script)
+        self.assertIn("url_refresh_count", script)
+        self.assertIn("resume_available", script)
+
     def test_settings_contains_every_required_control(self) -> None:
         html = self.read("index.html")
         control_names = (

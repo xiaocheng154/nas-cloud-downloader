@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import os
@@ -159,6 +160,12 @@ class ApiTests(unittest.TestCase):
             ],
             "quark-desktop",
         )
+        refresher = self.module.dl_manager.start_download.await_args.kwargs[
+            "url_refresher"
+        ]
+        self.assertTrue(callable(refresher))
+        asyncio.run(refresher())
+        self.module.quark_client.get_download_url.assert_awaited_with("file-id")
 
     def test_baidu_download_passes_cookie_to_download_engine(self) -> None:
         self.accept_disclaimer()
@@ -203,6 +210,12 @@ class ApiTests(unittest.TestCase):
                 "baidu_app_id_used"
             ],
             125463,
+        )
+        self.assertEqual(
+            self.module.dl_manager.start_download.await_args.kwargs[
+                "source_profile"
+            ],
+            "baidu-pcs",
         )
 
     def test_downloads_response_exposes_configured_directory(self) -> None:
@@ -381,6 +394,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["task_count"], 1)
         kwargs = self.module.dl_manager.start_download.await_args.kwargs
         self.assertEqual(kwargs["relative_dir"], "根目录/子目录")
+        self.assertTrue(callable(kwargs["url_refresher"]))
+        asyncio.run(kwargs["url_refresher"]())
+        self.module.quark_client.get_download_url.assert_awaited_with("nested")
 
     def test_credentials_are_never_returned(self) -> None:
         self.accept_disclaimer()

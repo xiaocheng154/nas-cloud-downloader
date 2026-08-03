@@ -524,6 +524,11 @@ function renderDownloads() {
     if (task.source_profile === "quark-web") transfer.push("网页回退");
     if (task.source_profile === "alipan-openapi") transfer.push("阿里云盘 OpenAPI");
     if (task.source_profile === "alipan-private") transfer.push("阿里云盘网页兼容通道");
+    if (task.resumed_bytes > 0) transfer.push(`已续传 ${formatSize(task.resumed_bytes)}`);
+    if (task.url_refresh_count > 0) transfer.push(`直链已刷新 ${task.url_refresh_count} 次`);
+    if (task.resume_available && ["error", "cancelled"].includes(task.status)) {
+      transfer.push("可断点续传");
+    }
     if (task.eta_seconds != null && task.status === "downloading") {
       transfer.push(`预计剩余 ${formatDuration(task.eta_seconds)}`);
     }

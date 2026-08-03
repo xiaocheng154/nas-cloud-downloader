@@ -60,6 +60,19 @@ class LocalFileManagerTests(unittest.TestCase):
         self.assertEqual(self.manager.thumbnail_path("/图.webp"), image.resolve())
         with self.assertRaises(ValueError):
             self.manager.thumbnail_path("/说明.txt")
+    def test_internal_resume_files_are_hidden(self) -> None:
+        (self.root / ".movie.mkv.clouddl.part").write_bytes(b"partial")
+        (self.root / ".movie.mkv.clouddl.part.resume.json").write_text(
+            "{}", encoding="utf-8"
+        )
+        (self.root / ".movie.mkv.clouddl.part.aria2").write_bytes(b"state")
+        (self.root / "movie.mkv").write_bytes(b"complete")
+
+        listed = self.manager.list_files("/")
+        searched = self.manager.search("movie", "/")
+
+        self.assertEqual([item["name"] for item in listed["files"]], ["movie.mkv"])
+        self.assertEqual([item["name"] for item in searched["files"]], ["movie.mkv"])
 
 
 if __name__ == "__main__":
