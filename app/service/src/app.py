@@ -46,7 +46,7 @@ from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))

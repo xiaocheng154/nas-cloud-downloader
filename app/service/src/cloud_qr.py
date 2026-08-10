@@ -17,6 +17,7 @@ from alipan_qr import make_qr_svg
 QR_TIMEOUT_SECONDS = 300
 BAIDU_QR_URL = "https://passport.baidu.com/v2/api/getqrcode"
 BAIDU_STATUS_URL = "https://passport.baidu.com/channel/unicast"
+BAIDU_EXCHANGE_URL = "https://passport.baidu.com/v3/login/main/qrbdusslogin"
 QUARK_TOKEN_URL = "https://uop.quark.cn/cas/ajax/getTokenForQrcodeLogin"
 QUARK_STATUS_URL = "https://uop.quark.cn/cas/ajax/getServiceTicketByQrcodeToken"
 QUARK_ACCOUNT_URL = "https://pan.quark.cn/account/info"
@@ -34,7 +35,14 @@ def _json_or_jsonp(response: httpx.Response) -> dict[str, Any]:
         match = re.search(r"^[^(]*\((.*)\)\s*;?$", text, re.S)
         if not match:
             raise RuntimeError("\u626b\u7801\u63a5\u53e3\u8fd4\u56de\u683c\u5f0f\u5f02\u5e38")
-        payload = json.loads(match.group(1))
+        body = match.group(1)
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            # Baidu occasionally returns JavaScript object notation with
+            # single-quoted property names instead of strict JSON.
+            body = re.sub(r"([{,]\s*)'([^'\\]+)'\s*:", r'\1"\2":', body)
+            payload = json.loads(body)
     if not isinstance(payload, dict):
         raise RuntimeError("\u626b\u7801\u63a5\u53e3\u8fd4\u56de\u683c\u5f0f\u5f02\u5e38")
     return payload
@@ -243,18 +251,38 @@ class CloudQrLoginManager:
                 channel = json.loads(channel)
             except json.JSONDecodeError:
                 channel = {"v": channel}
-        login_url = str(channel.get("v") or channel.get("url") or "") if isinstance(channel, dict) else ""
-        if not login_url:
+        authorization = str(channel.get("v") or channel.get("url") or "") if isinstance(channel, dict) else ""
+        if not authorization:
             return {"success": True, "status": "scanned", "message": "\u5df2\u786e\u8ba4\uff0c\u6b63\u5728\u83b7\u53d6\u767b\u5f55\u51ed\u636e"}
-        await client.get(
-            _baidu_image_url(login_url),
+        exchange = await client.get(
+            BAIDU_EXCHANGE_URL,
+            params={
+                "alg": "v3", "apiver": "v3", "bduss": authorization,
+                "callback": f"bd__cbs__{now}", "loginVersion": "v4",
+                "qrcode": "1", "time": now, "tpl": "netdisk",
+                "traceid": "", "tt": now, "v": now,
+            },
             headers={"Referer": "https://pan.baidu.com/"},
         )
-        await client.get("https://pan.baidu.com/disk/main", headers={"Referer": "https://pan.baidu.com/"})
-        cookie = _cookie_string(client, "baidu.com")
-        names = {part.split("=", 1)[0] for part in cookie.split("; ") if "=" in part}
-        if not {"BDUSS", "STOKEN"}.issubset(names):
-            return {"success": True, "status": "scanned", "message": "\u5df2\u786e\u8ba4\uff0c\u6b63\u5728\u540c\u6b65\u767e\u5ea6\u7f51\u76d8\u51ed\u636e"}
+        exchange.raise_for_status()
+        exchange_payload = _json_or_jsonp(exchange)
+        data = exchange_payload.get("data", {})
+        session_data = data.get("session", {}) if isinstance(data, dict) else {}
+        bduss = str(session_data.get("bduss") or "") if isinstance(session_data, dict) else ""
+        stoken = str(session_data.get("stoken") or "") if isinstance(session_data, dict) else ""
+        if not bduss or not stoken:
+            message = str(
+                exchange_payload.get("message")
+                or exchange_payload.get("errInfo", {}).get("msg", "")
+                or "百度未返回完整登录凭据"
+            )
+            await self.cancel(session_id)
+            return {
+                "success": False,
+                "status": "expired",
+                "error": f"{message}，请重新生成二维码后扫码",
+            }
+        cookie = f"BDUSS={bduss}; STOKEN={stoken}"
         await self.cancel(session_id, close_client=False)
         await client.aclose()
         return {"success": True, "status": "confirmed", "message": "\u626b\u7801\u767b\u5f55\u6210\u529f", "cookie": cookie}

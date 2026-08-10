@@ -251,7 +251,7 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.5.7")
+        self.assertEqual(manifest["version"], "1.5.8")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
         self.assertEqual(manifest["maintainer"], "xiaocheng154")
         self.assertEqual(manifest["distributor"], "xiaocheng154")
@@ -381,10 +381,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.5.7", source_manifest)
+        self.assertIn("version = 1.5.8", source_manifest)
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
-        self.assertIn('APP_VERSION = "1.5.7"', source_app)
+        self.assertIn('APP_VERSION = "1.5.8"', source_app)
 
     def test_source_requires_original_author_attribution(self) -> None:
         license_text = (PROJECT_ROOT / "LICENSE").read_text(encoding="utf-8")

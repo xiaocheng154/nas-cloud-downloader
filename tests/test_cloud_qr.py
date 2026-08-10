@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from cloud_qr import CloudQrLoginManager
+from cloud_qr import CloudQrLoginManager, _json_or_jsonp
 
 
 def response(status: int, *, payload: dict | None = None, content: bytes = b"", content_type: str = "application/json") -> httpx.Response:
@@ -18,6 +18,14 @@ def response(status: int, *, payload: dict | None = None, content: bytes = b"", 
 
 
 class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_baidu_javascript_object_jsonp_is_supported(self) -> None:
+        result = _json_or_jsonp(httpx.Response(
+            200,
+            text='bd__cbs__1({"code":"0", \'data\': {"session": {"bduss":"b", "stoken":"s"}}});',
+            request=httpx.Request("GET", "https://passport.baidu.com/qrbdusslogin"),
+        ))
+        self.assertEqual(result["data"]["session"]["stoken"], "s")
+
     async def test_quark_start_generates_local_svg(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()
@@ -85,16 +93,16 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("__uid=user", result["cookie"])
         self.assertNotIn(started["session_id"], manager._sessions)
 
-    async def test_baidu_confirm_normalizes_relative_login_url(self) -> None:
+    async def test_baidu_confirm_exchanges_authorization_for_credentials(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()
         client.cookies = httpx.Cookies()
-        client.cookies.set("BDUSS", "bduss", domain=".baidu.com")
-        client.cookies.set("STOKEN", "stoken", domain="pan.baidu.com")
         client.get.side_effect = [
             response(200, payload={"errno": 0, "channel_v": json.dumps({"v": "/a45a2c0ecb1fc752"})}),
-            response(200, payload={}),
-            response(200, payload={}),
+            response(200, payload={
+                "errInfo": {"no": "0"},
+                "data": {"session": {"bduss": "bduss", "stoken": "stoken"}},
+            }),
         ]
         started = await manager._store({
             "provider": "baidu", "token": "channel", "client": client,
@@ -104,10 +112,31 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         result = await manager.poll("baidu", started["session_id"])
 
         self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["cookie"], "BDUSS=bduss; STOKEN=stoken")
         self.assertEqual(
             client.get.await_args_list[1].args[0],
-            "https://passport.baidu.com/a45a2c0ecb1fc752",
+            "https://passport.baidu.com/v3/login/main/qrbdusslogin",
         )
+        self.assertEqual(client.get.await_args_list[1].kwargs["params"]["bduss"], "/a45a2c0ecb1fc752")
+
+    async def test_baidu_confirm_does_not_loop_when_exchange_has_no_credentials(self) -> None:
+        manager = CloudQrLoginManager()
+        client = AsyncMock()
+        client.cookies = httpx.Cookies()
+        client.get.side_effect = [
+            response(200, payload={"errno": 0, "channel_v": json.dumps({"v": "authorization"})}),
+            response(200, payload={"code": "310005", "message": "验证信息已过期", "data": {}}),
+        ]
+        started = await manager._store({
+            "provider": "baidu", "token": "channel", "client": client,
+            "image": b"png", "media_type": "image/png",
+        })
+
+        result = await manager.poll("baidu", started["session_id"])
+
+        self.assertEqual(result["status"], "expired")
+        self.assertIn("重新生成二维码", result["error"])
+        self.assertNotIn(started["session_id"], manager._sessions)
 
     async def test_baidu_poll_timeout_remains_waiting(self) -> None:
         manager = CloudQrLoginManager()
