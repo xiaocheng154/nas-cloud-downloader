@@ -85,6 +85,30 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("__uid=user", result["cookie"])
         self.assertNotIn(started["session_id"], manager._sessions)
 
+    async def test_baidu_confirm_normalizes_relative_login_url(self) -> None:
+        manager = CloudQrLoginManager()
+        client = AsyncMock()
+        client.cookies = httpx.Cookies()
+        client.cookies.set("BDUSS", "bduss", domain=".baidu.com")
+        client.cookies.set("STOKEN", "stoken", domain="pan.baidu.com")
+        client.get.side_effect = [
+            response(200, payload={"errno": 0, "channel_v": json.dumps({"v": "/a45a2c0ecb1fc752"})}),
+            response(200, payload={}),
+            response(200, payload={}),
+        ]
+        started = await manager._store({
+            "provider": "baidu", "token": "channel", "client": client,
+            "image": b"png", "media_type": "image/png",
+        })
+
+        result = await manager.poll("baidu", started["session_id"])
+
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(
+            client.get.await_args_list[1].args[0],
+            "https://passport.baidu.com/a45a2c0ecb1fc752",
+        )
+
     async def test_baidu_poll_timeout_remains_waiting(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()

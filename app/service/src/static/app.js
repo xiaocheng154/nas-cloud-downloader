@@ -831,7 +831,8 @@ async function runDiagnostics() {
       const l = document.createElement("span"); l.textContent = "Aria2 服务";
       const s = document.createElement("strong");
       s.className = ax.online ? "ok" : "fail";
-      s.textContent = ax.online ? "在线" : (ax.configured ? "未连接" : "未配置");
+      const reason = ax.error ? `\uFF1A${String(ax.error).slice(0, 160)}` : "";
+      s.textContent = ax.online ? "\u5728\u7EBF" : (ax.configured ? `\u672A\u8FDE\u63A5${reason}` : "\u672A\u914D\u7F6E");
       r.append(l, s); target.append(r);
     } catch (e) {}
     Object.entries(result).forEach(([name, value]) => {

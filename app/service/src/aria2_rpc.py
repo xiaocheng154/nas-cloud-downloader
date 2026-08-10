@@ -25,12 +25,15 @@ class Aria2Client:
         self._request_id = 0
         self._client: httpx.AsyncClient | None = None
         self._online = False
+        self._last_error = ""
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0),
+                timeout=httpx.Timeout(5.0),
                 headers={"Content-Type": "application/json"},
+                # A NAS-wide HTTP proxy must never intercept local JSON-RPC.
+                trust_env=False,
             )
         return self._client
 
@@ -65,15 +68,19 @@ class Aria2Client:
             result = response.json()
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             self._online = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
             raise Aria2Error(f"Aria2 RPC request failed: {exc}") from exc
         if not isinstance(result, dict):
             self._online = False
-            raise Aria2Error("Aria2 RPC returned an invalid response")
+            self._last_error = "Aria2 RPC returned an invalid response"
+            raise Aria2Error(self._last_error)
         if "error" in result:
             err = result["error"]
             msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            raise Aria2Error(f"Aria2 RPC error: {msg}")
+            self._last_error = f"Aria2 RPC error: {msg}"
+            raise Aria2Error(self._last_error)
         self._online = True
+        self._last_error = ""
         return result.get("result")
 
     async def check_connection(self) -> bool:
@@ -147,6 +154,10 @@ class Aria2Client:
     @property
     def is_online(self) -> bool:
         return self._online
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     @property
     def is_configured(self) -> bool:

@@ -246,7 +246,10 @@ class CloudQrLoginManager:
         login_url = str(channel.get("v") or channel.get("url") or "") if isinstance(channel, dict) else ""
         if not login_url:
             return {"success": True, "status": "scanned", "message": "\u5df2\u786e\u8ba4\uff0c\u6b63\u5728\u83b7\u53d6\u767b\u5f55\u51ed\u636e"}
-        await client.get(login_url, headers={"Referer": "https://pan.baidu.com/"})
+        await client.get(
+            _baidu_image_url(login_url),
+            headers={"Referer": "https://pan.baidu.com/"},
+        )
         await client.get("https://pan.baidu.com/disk/main", headers={"Referer": "https://pan.baidu.com/"})
         cookie = _cookie_string(client, "baidu.com")
         names = {part.split("=", 1)[0] for part in cookie.split("; ") if "=" in part}

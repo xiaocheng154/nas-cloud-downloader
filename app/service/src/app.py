@@ -44,7 +44,7 @@ from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.5.5"
+APP_VERSION = "1.5.6"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -66,12 +66,17 @@ def _sync_aria2_settings():
     settings = settings_store.load()
     aria2_client.url = settings.aria2_rpc_url or "http://127.0.0.1:6800/jsonrpc"
     secret = settings.aria2_secret or ""
-    secret_file = Path(os.environ.get("ARIA2_SECRET_FILE", ""))
-    if not secret and secret_file.is_file():
+    secret_file_value = os.environ.get("ARIA2_SECRET_FILE", "")
+    secret_file = Path(secret_file_value) if secret_file_value else None
+    using_bundled = bool(os.environ.get("ARIA2_BIN")) and aria2_client.url == "http://127.0.0.1:6800/jsonrpc"
+    if secret_file and secret_file.is_file() and (using_bundled or not secret):
         try:
+            # The lifecycle script generates the bundled service secret. It must
+            # take precedence over a stale custom value saved in settings.
             secret = secret_file.read_text(encoding="utf-8").strip()
         except OSError:
-            secret = ""
+            if not secret:
+                secret = ""
     aria2_client.secret = secret
 
 
@@ -150,6 +155,7 @@ alipan_client = _new_alipan_client()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _sync_aria2_settings()
     logger.info("多网盘下载器 %s started", APP_VERSION)
     try:
         yield
@@ -565,6 +571,7 @@ async def aria2_status():
         "online": online,
         "url": aria2_client.url,
         "bundled": bool(os.environ.get("ARIA2_BIN")),
+        "error": aria2_client.last_error,
     }
 
 

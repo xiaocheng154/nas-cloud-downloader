@@ -53,6 +53,12 @@ class Aria2ClientTests(unittest.IsolatedAsyncioTestCase):
         online = await client.check_connection()
         self.assertFalse(online)
 
+    async def test_local_rpc_client_ignores_environment_proxy(self) -> None:
+        client = Aria2Client()
+        with patch("aria2_rpc.httpx.AsyncClient") as async_client:
+            await client._get_client()
+        self.assertFalse(async_client.call_args.kwargs["trust_env"])
+
     async def test_get_global_stat_empty(self) -> None:
         client = Aria2Client(url="http://127.0.0.1:1")
         with self.assertRaises(Aria2Error):

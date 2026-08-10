@@ -96,6 +96,20 @@ class ApiTests(unittest.TestCase):
             "rpc-top-secret",
         )
 
+    def test_bundled_aria2_uses_lifecycle_secret(self) -> None:
+        secret_file = self.config_dir.parent / "aria2.secret"
+        secret_file.write_text("generated-secret\n", encoding="utf-8")
+        self.module.settings_store.update({
+            "aria2_rpc_url": "http://127.0.0.1:6800/jsonrpc",
+            "aria2_secret": "stale-custom-secret",
+        })
+        with patch.dict(os.environ, {
+            "ARIA2_BIN": "/app/runtime/aria2/aria2c",
+            "ARIA2_SECRET_FILE": str(secret_file),
+        }):
+            self.module._sync_aria2_settings()
+        self.assertEqual(self.module.aria2_client.secret, "generated-secret")
+
     def test_aria2_rpc_url_must_be_a_local_http_endpoint(self) -> None:
         self.accept_disclaimer()
         for value in (

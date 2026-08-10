@@ -311,6 +311,7 @@ class StaticUiTests(unittest.TestCase):
         html = self.read("index.html")
         self.assertIn("0.1 MB/s 约等于 102 KB/s", html)
         self.assertIn("\u5b89\u88c5\u5305\u5df2\u5185\u7f6e Aria2", html)
+        self.assertIn("ax.error", self.read("app.js"))
 
     def test_logo_is_flat_theme_aware_svg(self) -> None:
         logo = self.read("assets/logo.svg")
