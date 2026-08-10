@@ -253,6 +253,8 @@ class FpkPackageTests(unittest.TestCase):
         self.assertEqual(manifest["appname"], "clouddl")
         self.assertEqual(manifest["version"], "1.5.7")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
+        self.assertEqual(manifest["maintainer"], "xiaocheng154")
+        self.assertEqual(manifest["distributor"], "xiaocheng154")
         self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
         self.assertEqual(manifest["platform"], EXPECTED_PLATFORM)
@@ -383,6 +385,16 @@ class FpkPackageTests(unittest.TestCase):
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
         self.assertIn('APP_VERSION = "1.5.7"', source_app)
+
+    def test_source_requires_original_author_attribution(self) -> None:
+        license_text = (PROJECT_ROOT / "LICENSE").read_text(encoding="utf-8")
+        notice = (PROJECT_ROOT / "NOTICE").read_text(encoding="utf-8")
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(encoding="utf-8")
+        source_ui = (PROJECT_ROOT / "app/service/src/static/app.js").read_text(encoding="utf-8")
+        for content in (license_text, notice, readme, source_app, source_ui):
+            self.assertIn("xiaocheng154", content)
+        self.assertIn("https://github.com/xiaocheng154/nas-cloud-downloader", license_text)
 
 
 if __name__ == "__main__":

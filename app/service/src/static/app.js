@@ -1,3 +1,5 @@
+// Original author: xiaocheng154
+// Project: https://github.com/xiaocheng154/nas-cloud-downloader
 import {api, downloadFile, thumbnailUrl} from "./api.js";
 
 const STARTUP_DURATION_MS = 3500;

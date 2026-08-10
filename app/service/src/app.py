@@ -1,3 +1,5 @@
+# Original author: xiaocheng154
+# Project: https://github.com/xiaocheng154/nas-cloud-downloader
 from __future__ import annotations
 
 import asyncio
