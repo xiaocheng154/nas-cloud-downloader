@@ -251,7 +251,7 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.5.6")
+        self.assertEqual(manifest["version"], "1.5.7")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
         self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
@@ -379,10 +379,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.5.6", source_manifest)
+        self.assertIn("version = 1.5.7", source_manifest)
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
-        self.assertIn('APP_VERSION = "1.5.6"', source_app)
+        self.assertIn('APP_VERSION = "1.5.7"', source_app)
 
 
 if __name__ == "__main__":

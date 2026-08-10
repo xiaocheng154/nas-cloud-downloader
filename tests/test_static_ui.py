@@ -89,6 +89,17 @@ class StaticUiTests(unittest.TestCase):
         self.assertIn("resumed_bytes", script)
         self.assertIn("url_refresh_count", script)
         self.assertIn("resume_available", script)
+        self.assertIn("pauseDownload", script)
+        self.assertIn("resumeDownload", script)
+
+    def test_provider_download_totals_update_during_downloads(self) -> None:
+        script = self.read("app.js")
+        self.assertIn('task.provider === provider', script)
+        self.assertIn('Number(task.downloaded || 0)', script)
+        self.assertIn('state.downloadTimer = window.setInterval', script)
+        self.assertIn('downloadsRefreshing', script)
+        self.assertIn('}, 1000);', script)
+        self.assertNotIn('if (state.view === "downloads") refreshDownloads();', script)
 
     def test_settings_contains_every_required_control(self) -> None:
         html = self.read("index.html")
@@ -210,6 +221,7 @@ class StaticUiTests(unittest.TestCase):
         script = self.read("app.js")
         css = self.read("styles.css")
         self.assertIn("document.startViewTransition", script)
+        html = self.read("index.html")
         self.assertIn(
             "event.currentTarget.getBoundingClientRect()",
             script,

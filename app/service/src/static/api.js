@@ -55,6 +55,8 @@ export const api = {
     method: "POST", headers: jsonHeaders, body: JSON.stringify(payload)
   }),
   downloads: () => request("/api/downloads"),
+  pauseDownload: (id) => request(`/api/downloads/${encodeURIComponent(id)}/pause`, {method: "POST"}),
+  resumeDownload: (id) => request(`/api/downloads/${encodeURIComponent(id)}/resume`, {method: "POST"}),
   cancelDownload: (id) => request(`/api/downloads/${encodeURIComponent(id)}`, {method: "DELETE"}),
   clearDownloads: () => request("/api/downloads/clear", {method: "POST"}),
   logs: (lines = 300) => request(query("/api/logs", {lines})),

@@ -966,6 +966,72 @@ class NestedDirectoryDownloadTests(unittest.IsolatedAsyncioTestCase):
                 )
 
 
+class PauseResumeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_builtin_download_can_pause_and_continue_same_task(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            settings = SettingsStore(root_path / "config")
+            settings.update({"aria2_enabled": False, "reserve_space_gb": 0})
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=root_path / "downloads",
+                settings_store=settings,
+            )
+            started = asyncio.Event()
+            wait_forever = asyncio.Event()
+
+            async def slow_download(task, url, headers, temporary, num_threads):
+                temporary.write_bytes(b"partial")
+                started.set()
+                await wait_forever.wait()
+
+            manager._download = slow_download
+            task_id = await manager.start_download(
+                "https://download.example/file", "pause.bin", expected_size=12
+            )
+            await asyncio.wait_for(started.wait(), timeout=1)
+
+            self.assertTrue(await manager.pause_download(task_id))
+            self.assertEqual(manager.tasks[task_id]["status"], "paused")
+            self.assertTrue(manager.tasks[task_id]["resume_available"])
+
+            async def finish_download(task, url, headers, temporary, num_threads):
+                temporary.write_bytes(b"finished-data")
+
+            manager._download = finish_download
+            self.assertTrue(await manager.resume_download(task_id))
+            await manager.tasks[task_id]["_worker"]
+            self.assertEqual(manager.tasks[task_id]["status"], "completed")
+            self.assertEqual(
+                (root_path / "downloads" / "pause.bin").read_bytes(),
+                b"finished-data",
+            )
+
+    async def test_aria2_download_uses_rpc_pause_and_unpause(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            aria2 = AsyncMock()
+            manager_module = __import__("downloader")
+            manager = manager_module.DownloadManager(
+                download_dir=Path(root) / "downloads",
+                settings_store=SettingsStore(Path(root) / "config"),
+                aria2_client=aria2,
+            )
+            manager.tasks["task-1"] = {
+                "id": "task-1",
+                "status": "downloading",
+                "backend": "aria2",
+                "gid": "gid-1",
+            }
+
+            self.assertTrue(await manager.pause_download("task-1"))
+            aria2.pause.assert_awaited_once_with("gid-1", force=True)
+            self.assertEqual(manager.tasks["task-1"]["status"], "paused")
+
+            self.assertTrue(await manager.resume_download("task-1"))
+            aria2.unpause.assert_awaited_once_with("gid-1")
+            self.assertEqual(manager.tasks["task-1"]["status"], "queued")
+
+
 class Aria2DownloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_enabled_local_aria2_receives_new_download(self) -> None:
         with tempfile.TemporaryDirectory() as root:

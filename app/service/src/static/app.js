@@ -21,6 +21,7 @@ const state = {
   qrProvider: "",
   qrSession: "",
   qrTimer: null,
+  downloadsRefreshing: false,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -462,6 +463,8 @@ const statusLabels = {
 };
 
 async function refreshDownloads() {
+  if (state.downloadsRefreshing) return;
+  state.downloadsRefreshing = true;
   try {
     const result = await api.downloads();
     state.downloads = result.tasks || [];
@@ -469,6 +472,8 @@ async function refreshDownloads() {
     renderDownloads();
   } catch (error) {
     if (error.status !== 403) toast(error.message, true);
+  } finally {
+    state.downloadsRefreshing = false;
   }
 }
 
@@ -481,14 +486,16 @@ function renderDownloads() {
   list.replaceChildren();
   const tasks = [...state.downloads].reverse();
   empty.classList.toggle("is-hidden", tasks.length > 0);
-  const active = tasks.filter((task) => !["completed", "error", "cancelled", "skipped"].includes(task.status)).length;
-  const completed = tasks.filter((task) => task.status === "completed").length;
-  const total = tasks.filter((task) => task.status === "completed").reduce((sum, task) => sum + Number(task.total_size || 0), 0);
+  const active = tasks.filter((task) => !["completed", "error", "cancelled", "skipped", "paused"].includes(task.status)).length;
   $("#download-count").textContent = String(active);
   ["baidu", "quark", "alipan"].forEach((provider) => {
-    $(`#${provider}-active`).textContent = String(active);
-    $(`#${provider}-completed`).textContent = String(completed);
-    $(`#${provider}-total`).textContent = formatSize(total);
+    const providerTasks = tasks.filter((task) => task.provider === provider);
+    const providerActive = providerTasks.filter((task) => !["completed", "error", "cancelled", "skipped", "paused"].includes(task.status)).length;
+    const providerCompleted = providerTasks.filter((task) => task.status === "completed").length;
+    const providerDownloaded = providerTasks.reduce((sum, task) => sum + Math.max(0, Number(task.downloaded || 0)), 0);
+    $(`#${provider}-active`).textContent = String(providerActive);
+    $(`#${provider}-completed`).textContent = String(providerCompleted);
+    $(`#${provider}-total`).textContent = formatSize(providerDownloaded);
   });
   tasks.forEach((task) => {
     const card = document.createElement("article");
@@ -546,6 +553,15 @@ function renderDownloads() {
     if (!["completed", "error", "cancelled", "skipped"].includes(task.status)) {
       const actions = document.createElement("div");
       actions.className = "inline-actions";
+      const pause = document.createElement("button");
+      pause.type = "button";
+      pause.className = "button button-secondary";
+      pause.textContent = task.status === "paused" ? "\u7EE7\u7EED" : "\u6682\u505C";
+      pause.addEventListener("click", async () => {
+        if (task.status === "paused") await api.resumeDownload(task.id);
+        else await api.pauseDownload(task.id);
+        await refreshDownloads();
+      });
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.className = "button button-text danger";
@@ -554,7 +570,7 @@ function renderDownloads() {
         await api.cancelDownload(task.id);
         await refreshDownloads();
       });
-      actions.append(cancel);
+      actions.append(pause, cancel);
       card.append(actions);
     }
     list.append(card);
@@ -934,8 +950,8 @@ async function boot() {
   await preloadPromise;
   if (!state.onboarding?.required) await activateView("baidu");
   state.downloadTimer = window.setInterval(() => {
-    if (state.view === "downloads") refreshDownloads();
-  }, 2000);
+    refreshDownloads();
+  }, 1000);
 }
 
 boot();

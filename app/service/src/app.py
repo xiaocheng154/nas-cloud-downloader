@@ -44,7 +44,7 @@ from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.5.6"
+APP_VERSION = "1.5.7"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -1091,6 +1091,16 @@ async def list_downloads():
 @app.get("/api/downloads/{task_id}")
 async def download_status(task_id: str):
     return dl_manager.get_status(task_id)
+
+
+@app.post("/api/downloads/{task_id}/pause")
+async def pause_download(task_id: str):
+    return {"success": await dl_manager.pause_download(task_id)}
+
+
+@app.post("/api/downloads/{task_id}/resume")
+async def resume_download(task_id: str):
+    return {"success": await dl_manager.resume_download(task_id)}
 
 
 @app.delete("/api/downloads/{task_id}")

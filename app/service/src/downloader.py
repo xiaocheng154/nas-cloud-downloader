@@ -376,6 +376,7 @@ class DownloadManager:
             "started_at": time.time(),
             "error": None,
             "cancel_requested": False,
+            "pause_requested": False,
             "range_supported": None,
             "connections_used": 0,
             "degradation_reason": "",
@@ -454,6 +455,15 @@ class DownloadManager:
             destination_dir / f".{decision.path.name}.clouddl.part"
         )
         task["_temporary_path"] = str(temporary)
+        run_headers = dict(headers or {})
+        task["_run_context"] = (
+            url,
+            run_headers,
+            decision.path,
+            temporary,
+            decision.replace_on_success,
+            num_threads,
+        )
         task["resume_available"] = temporary.is_file() and temporary.stat().st_size > 0
         LOGGER.info(
             "Download task %s: provider=%s file=%s size=%d resume=%s",
@@ -472,7 +482,7 @@ class DownloadManager:
                 await self._start_aria2_task(
                     task,
                     url,
-                    dict(headers or {}),
+                    run_headers,
                     decision.path,
                     temporary,
                     num_threads,
@@ -484,7 +494,7 @@ class DownloadManager:
             self._run_task(
                 task,
                 url,
-                dict(headers or {}),
+                run_headers,
                 decision.path,
                 temporary,
                 decision.replace_on_success,
@@ -701,11 +711,15 @@ class DownloadManager:
                 resume_available=False,
             )
         except asyncio.CancelledError:
-            task["status"] = "cancelled"
+            paused = task.get("pause_requested") and not task.get("cancel_requested")
+            task["status"] = "paused" if paused else "cancelled"
+            task["speed"] = 0.0
+            task["eta_seconds"] = None
             task["resume_available"] = temporary.is_file() and temporary.stat().st_size > 0
             LOGGER.info(
-                "Download task %s cancelled: provider=%s resume_available=%s",
+                "Download task %s %s: provider=%s resume_available=%s",
                 task.get("id", "unknown"),
+                "paused" if paused else "cancelled",
                 _task_provider(task),
                 task["resume_available"],
             )
@@ -1371,6 +1385,62 @@ class DownloadManager:
                 else None
             )
 
+    async def pause_download(self, task_id: str) -> bool:
+        task = self.tasks.get(task_id)
+        pauseable = {
+            "pending", "queued", "waiting_schedule", "connecting",
+            "downloading", "paused_disk",
+        }
+        if not task or task.get("status") not in pauseable:
+            return False
+        if task.get("backend") == "aria2" and task.get("gid"):
+            try:
+                await self.aria2_client.pause(task["gid"], force=True)
+            except Exception as exc:
+                LOGGER.warning("Aria2 pause failed task=%s: %s", task_id, exc)
+                return False
+            task.update(status="paused", speed=0.0, eta_seconds=None)
+            return True
+
+        task["pause_requested"] = True
+        task.update(status="paused", speed=0.0, eta_seconds=None)
+        worker = task.get("_worker")
+        if worker and not worker.done():
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+        return True
+
+    async def resume_download(self, task_id: str) -> bool:
+        task = self.tasks.get(task_id)
+        if not task or task.get("status") != "paused":
+            return False
+        if task.get("backend") == "aria2" and task.get("gid"):
+            try:
+                await self.aria2_client.unpause(task["gid"])
+            except Exception as exc:
+                LOGGER.warning("Aria2 resume failed task=%s: %s", task_id, exc)
+                return False
+            task.update(status="queued", speed=0.0, eta_seconds=None)
+            return True
+
+        context = task.get("_run_context")
+        if not isinstance(context, tuple) or len(context) != 6:
+            return False
+        task.update(
+            pause_requested=False,
+            cancel_requested=False,
+            status="pending",
+            speed=0.0,
+            eta_seconds=None,
+            error=None,
+        )
+        worker = asyncio.create_task(self._run_task(task, *context))
+        task["_worker"] = worker
+        return True
+
     def cancel_download(self, task_id: str) -> bool:
         task = self.tasks.get(task_id)
         if not task or task["status"] in TERMINAL_STATES:
@@ -1383,6 +1453,8 @@ class DownloadManager:
         worker = task.get("_worker")
         if worker and not worker.done():
             worker.cancel()
+        else:
+            task.update(status="cancelled", speed=0.0, eta_seconds=None)
         return True
 
     def get_status(self, task_id: str) -> dict[str, Any]:
