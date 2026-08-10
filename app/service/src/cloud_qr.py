@@ -40,8 +40,10 @@ def _json_or_jsonp(response: httpx.Response) -> dict[str, Any]:
             payload = json.loads(body)
         except json.JSONDecodeError:
             # Baidu occasionally returns JavaScript object notation with
-            # single-quoted property names instead of strict JSON.
+            # single-quoted property names and JavaScript-only backslash
+            # escapes instead of strict JSON.
             body = re.sub(r"([{,]\s*)'([^'\\]+)'\s*:", r'\1"\2":', body)
+            body = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', body)
             payload = json.loads(body)
     if not isinstance(payload, dict):
         raise RuntimeError("\u626b\u7801\u63a5\u53e3\u8fd4\u56de\u683c\u5f0f\u5f02\u5e38")
@@ -66,6 +68,39 @@ def _cookie_string(client: httpx.AsyncClient, domain: str) -> str:
         if cookie.domain and domain in cookie.domain:
             values[cookie.name] = cookie.value
     return "; ".join(f"{name}={value}" for name, value in values.items())
+
+
+def _baidu_netdisk_stoken(session: dict[str, Any]) -> str:
+    raw = session.get("stokenList")
+    if isinstance(raw, str) and raw:
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    if isinstance(raw, dict):
+        for key in ("netdisk", "pan", "cloud"):
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                return value
+        if len(raw) == 1:
+            value = next(iter(raw.values()))
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(raw, list):
+        fallback = ""
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("stoken") or item.get("token") or "")
+            if not value:
+                continue
+            name = str(item.get("tpl") or item.get("name") or item.get("product") or "")
+            if name in {"netdisk", "pan", "cloud"}:
+                return value
+            fallback = fallback or value
+        if fallback:
+            return fallback
+    return str(session.get("stoken") or "")
 
 
 class CloudQrLoginManager:
@@ -254,6 +289,7 @@ class CloudQrLoginManager:
         authorization = str(channel.get("v") or channel.get("url") or "") if isinstance(channel, dict) else ""
         if not authorization:
             return {"success": True, "status": "scanned", "message": "\u5df2\u786e\u8ba4\uff0c\u6b63\u5728\u83b7\u53d6\u767b\u5f55\u51ed\u636e"}
+        authorization = authorization.lstrip("/")
         exchange = await client.get(
             BAIDU_EXCHANGE_URL,
             params={
@@ -268,8 +304,22 @@ class CloudQrLoginManager:
         exchange_payload = _json_or_jsonp(exchange)
         data = exchange_payload.get("data", {})
         session_data = data.get("session", {}) if isinstance(data, dict) else {}
-        bduss = str(session_data.get("bduss") or "") if isinstance(session_data, dict) else ""
-        stoken = str(session_data.get("stoken") or "") if isinstance(session_data, dict) else ""
+        response_cookies = {
+            cookie.name: cookie.value
+            for cookie in client.cookies.jar
+            if cookie.domain and "baidu.com" in cookie.domain
+        }
+        bduss = str(
+            response_cookies.get("BDUSS")
+            or response_cookies.get("BDUSS_BFESS")
+            or (session_data.get("bduss") if isinstance(session_data, dict) else "")
+            or ""
+        )
+        stoken = str(
+            response_cookies.get("STOKEN")
+            or (_baidu_netdisk_stoken(session_data) if isinstance(session_data, dict) else "")
+            or ""
+        )
         if not bduss or not stoken:
             message = str(
                 exchange_payload.get("message")

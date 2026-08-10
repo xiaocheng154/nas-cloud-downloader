@@ -26,6 +26,18 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(result["data"]["session"]["stoken"], "s")
 
+    async def test_baidu_jsonp_repairs_invalid_backslash_escape(self) -> None:
+        result = _json_or_jsonp(httpx.Response(
+            200,
+            text=(
+                'bd__cbs__1({"code":"0","message":"path\\qvalue",'
+                '"data":{"session":{"bduss":"b","stoken":"s"}}});'
+            ),
+            request=httpx.Request("GET", "https://passport.baidu.com/qrbdusslogin"),
+        ))
+        self.assertEqual(result["data"]["session"]["bduss"], "b")
+        self.assertEqual(result["message"], "path\\qvalue")
+
     async def test_quark_start_generates_local_svg(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()
@@ -97,11 +109,17 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         manager = CloudQrLoginManager()
         client = AsyncMock()
         client.cookies = httpx.Cookies()
+        client.cookies.set("BDUSS_BFESS", "cookie-bduss", domain=".baidu.com")
+        client.cookies.set("STOKEN", "cookie-stoken", domain="pan.baidu.com")
         client.get.side_effect = [
             response(200, payload={"errno": 0, "channel_v": json.dumps({"v": "/a45a2c0ecb1fc752"})}),
             response(200, payload={
                 "errInfo": {"no": "0"},
-                "data": {"session": {"bduss": "bduss", "stoken": "stoken"}},
+                "data": {"session": {
+                    "bduss": "bduss",
+                    "stoken": "generic-stoken",
+                    "stokenList": {"netdisk": "stoken"},
+                }},
             }),
         ]
         started = await manager._store({
@@ -112,12 +130,12 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         result = await manager.poll("baidu", started["session_id"])
 
         self.assertEqual(result["status"], "confirmed")
-        self.assertEqual(result["cookie"], "BDUSS=bduss; STOKEN=stoken")
+        self.assertEqual(result["cookie"], "BDUSS=cookie-bduss; STOKEN=cookie-stoken")
         self.assertEqual(
             client.get.await_args_list[1].args[0],
             "https://passport.baidu.com/v3/login/main/qrbdusslogin",
         )
-        self.assertEqual(client.get.await_args_list[1].kwargs["params"]["bduss"], "/a45a2c0ecb1fc752")
+        self.assertEqual(client.get.await_args_list[1].kwargs["params"]["bduss"], "a45a2c0ecb1fc752")
 
     async def test_baidu_confirm_does_not_loop_when_exchange_has_no_credentials(self) -> None:
         manager = CloudQrLoginManager()
