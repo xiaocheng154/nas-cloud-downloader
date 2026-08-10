@@ -46,6 +46,26 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(media_type, "image/png")
         await manager.cancel(started["session_id"])
 
+    async def test_baidu_start_normalizes_current_host_only_image_url(self) -> None:
+        manager = CloudQrLoginManager()
+        client = AsyncMock()
+        client.get.side_effect = [
+            response(200, payload={
+                "sign": "channel",
+                "imgurl": "passport.baidu.com/v2/api/qrcode?sign=channel",
+            }),
+            response(200, content=b"\x89PNG\r\n", content_type="image/png"),
+        ]
+        with patch.object(manager, "_client", return_value=client):
+            started = await manager.start("baidu")
+
+        image_request = client.get.await_args_list[1]
+        self.assertEqual(
+            image_request.args[0],
+            "https://passport.baidu.com/v2/api/qrcode?sign=channel",
+        )
+        await manager.cancel(started["session_id"])
+
     async def test_quark_confirm_returns_cookie_only_to_backend_caller(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()

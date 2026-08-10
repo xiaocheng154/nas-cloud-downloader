@@ -219,6 +219,8 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["fid"], "file-1")
         self.assertEqual(result["headers"]["Referer"], "https://www.aliyundrive.com/")
         self.assertEqual(result["client_profile"], "private")
+        request_body = client._client.post.await_args.kwargs["json"]
+        self.assertEqual(request_body["expire_sec"], 115200)
 
     async def test_get_download_url_empty_url_reports_share_limit(self) -> None:
         client = AlipanPanClient(refresh_token="rt")
@@ -235,7 +237,7 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         result = await client.get_download_url("big-share-file")
 
         self.assertFalse(result["success"])
-        self.assertIn("下载直链", result["error"])
+        self.assertIn("OpenAPI", result["error"])
 
     async def test_private_large_file_reports_official_web_limit(self) -> None:
         client = AlipanPanClient(refresh_token="rt")
@@ -254,7 +256,7 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["success"])
         self.assertNotIn("100 MB", result["error"])
-        self.assertIn("\u672a\u8fd4\u56de\u53ef\u7528\u4e0b\u8f7d\u76f4\u94fe", result["error"])
+        self.assertIn("OpenAPI", result["error"])
 
     async def test_openapi_uses_official_endpoint_and_cdn_url(self) -> None:
         client = AlipanPanClient(

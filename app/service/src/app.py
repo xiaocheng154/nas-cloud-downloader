@@ -44,7 +44,7 @@ from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -797,7 +797,7 @@ async def cloud_qr_start(provider: str):
     try:
         return await cloud_qr_manager.start(provider)
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-        logger.warning("%s QR login start failed: %s", provider, type(exc).__name__)
+        logger.warning("%s QR login start failed: %s: %s", provider, type(exc).__name__, exc)
         raise HTTPException(502, f"\u751f\u6210\u626b\u7801\u767b\u5f55\u4e8c\u7ef4\u7801\u5931\u8d25\uff1a{exc}") from exc
 
 

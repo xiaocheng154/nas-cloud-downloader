@@ -513,17 +513,27 @@ class AlipanPanClient:
             data = await self._api(
                 self._family,
                 "download",
-                {"drive_id": self._drive_id, "file_id": file_id},
+                {
+                    "drive_id": self._drive_id,
+                    "file_id": file_id,
+                    # The private PDS endpoint accepts up to 115200 seconds. A
+                    # long-lived URL prevents queued downloads from expiring.
+                    "expire_sec": 115200,
+                },
             )
             cached = self._file_cache.get(file_id, {})
             url = data.get("cdn_url") or data.get("url") or data.get("download_url")
             size = int(data.get("size") or cached.get("size") or 0)
             name = str(data.get("name") or cached.get("name") or file_id)
             if not isinstance(url, str) or not url:
-                return {
-                    "success": False,
-                    "error": "阿里云盘未返回可用下载直链，请刷新凭据后重试",
-                }
+                if self.auth_mode == "refresh_token":
+                    error = (
+                        "阿里云盘网页接口未返回下载直链。凭据仍然有效；该文件可能被网页端限制，"
+                        "请在设置中改用阿里云盘 OpenAPI 授权后重试"
+                    )
+                else:
+                    error = "阿里云盘 OpenAPI 未返回下载直链，请稍后重试"
+                return {"success": False, "error": error}
             LOGGER.info(
                 "阿里云盘获取下载链接成功 file_id=%s mode=%s size=%d",
                 file_id,

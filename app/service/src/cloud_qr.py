@@ -40,6 +40,18 @@ def _json_or_jsonp(response: httpx.Response) -> dict[str, Any]:
     return payload
 
 
+def _baidu_image_url(value: str) -> str:
+    """Normalize every URL shape currently returned by Baidu's QR API."""
+    value = value.strip().replace("\\/", "/")
+    if value.startswith("//"):
+        return f"https:{value}"
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("passport.baidu.com/"):
+        return f"https://{value}"
+    return urljoin("https://passport.baidu.com/", value)
+
+
 def _cookie_string(client: httpx.AsyncClient, domain: str) -> str:
     values: dict[str, str] = {}
     for cookie in client.cookies.jar:
@@ -129,7 +141,10 @@ class CloudQrLoginManager:
             image_url = str(payload.get("imgurl") or payload.get("img") or "")
             if not sign or not image_url:
                 raise RuntimeError(str(payload.get("errmsg") or "\u767e\u5ea6\u672a\u8fd4\u56de\u6709\u6548\u767b\u5f55\u4e8c\u7ef4\u7801"))
-            image_response = await client.get(urljoin("https://passport.baidu.com", image_url))
+            image_response = await client.get(
+                _baidu_image_url(image_url),
+                headers={"Referer": "https://pan.baidu.com/"},
+            )
             image_response.raise_for_status()
             content_type = image_response.headers.get("content-type", "").split(";", 1)[0]
             if not image_response.content or not content_type.startswith("image/"):
