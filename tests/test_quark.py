@@ -349,3 +349,37 @@ class QuarkClientTests(unittest.IsolatedAsyncioTestCase):
             [(item["fid"], item["relative_dir"]) for item in result["files"]],
             [("root-file", ""), ("nested-file", "子目录")],
         )
+
+    async def test_thumbnail_url_field_and_protocol_relative_url_are_supported(self) -> None:
+        client = QuarkPanClient("k=v")
+        entry = client._file_entry({
+            "fid": "image-1", "file_name": "photo.jpg", "file_type": 1,
+            "thumbnail_url": "//image.quark.cn/photo.jpg",
+        })
+        self.assertTrue(entry["has_thumbnail"])
+        self.assertEqual(client._thumbnail_urls["image-1"], "https://image.quark.cn/photo.jpg")
+
+    async def test_thumbnail_rejects_non_image_response(self) -> None:
+        client = QuarkPanClient("k=v")
+        client._thumbnail_urls["image-1"] = "https://image.quark.cn/photo.jpg"
+        client._client = AsyncMock()
+        client._client.get.return_value = response(200, text="forbidden", content_type="text/html")
+        result = await client.fetch_thumbnail("image-1")
+        self.assertFalse(result["success"])
+
+    async def test_thumbnail_forwards_image_accept_and_referer(self) -> None:
+        client = QuarkPanClient("k=v")
+        client._thumbnail_urls["image-1"] = "https://image.quark.cn/photo.jpg"
+        client._client = AsyncMock()
+        client._client.get.return_value = httpx.Response(
+            200,
+            content=b"jpeg-data",
+            headers={"content-type": "image/jpeg; charset=binary"},
+            request=httpx.Request("GET", "https://image.quark.cn/photo.jpg"),
+        )
+        result = await client.fetch_thumbnail("image-1")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["content_type"], "image/jpeg")
+        headers = client._client.get.await_args.kwargs["headers"]
+        self.assertIn("image/", headers["Accept"])
+        self.assertEqual(headers["Referer"], "https://pan.quark.cn/")

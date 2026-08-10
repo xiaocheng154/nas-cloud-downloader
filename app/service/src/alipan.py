@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import socket
+import time
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import httpx
 
-WEBSV_REFRESH = "https://websv.aliyundrive.com/token/refresh"
-ALIPAN_REFRESH = "https://auth.alipan.com/v2/account/token"
+PRIVATE_REFRESH_URLS = (
+    "https://api.aliyundrive.com/token/refresh",
+    "https://auth.aliyundrive.com/v2/account/token",
+    "https://auth.alipan.com/v2/account/token",
+)
 OPENAPI_REFRESH_URLS = (
-    "https://open.aliyundrive.com/idp/oauth/access_token",
     "https://openapi.alipan.com/oauth/access_token",
+    "https://open.aliyundrive.com/idp/oauth/access_token",
 )
 
 PRIVATE_API = {
@@ -23,8 +30,8 @@ PRIVATE_API = {
 }
 OPEN_API = {
     "name": "openapi",
-    "base": "https://open.aliyundrive.com",
-    "user": "/adrive/v1.0/user/getUserInfo",
+    "base": "https://openapi.alipan.com",
+    "user": "/adrive/v1.0/user/getDriveInfo",
     "list": "/adrive/v1.0/openFile/list",
     "search": "/adrive/v1.0/openFile/search",
     "download": "/adrive/v1.0/openFile/getDownloadUrl",
@@ -32,9 +39,56 @@ OPEN_API = {
 }
 
 DOWNLOAD_REFERER = "https://www.aliyundrive.com/"
-REFRESH_HEADERS = {"x-requested-with": "XMLHttpRequest"}
-PRIVATE_WEB_DOWNLOAD_LIMIT = 100 * 1024 * 1024
+VERIFY_FAILURE_COOLDOWN_SECONDS = 30.0
 LOGGER = logging.getLogger("clouddl.alipan")
+DNS_ERROR_MARKERS = (
+    "name or service not known",
+    "temporary failure in name resolution",
+    "nodename nor servname provided",
+    "getaddrinfo failed",
+    "name does not resolve",
+)
+
+
+def _host(url: str) -> str:
+    return urlsplit(url).hostname or url
+
+
+def _is_dns_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, socket.gaierror):
+            return True
+        if any(marker in str(current).lower() for marker in DNS_ERROR_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _network_error(exc: httpx.HTTPError, url: str) -> str:
+    host = _host(url)
+    if _is_dns_error(exc):
+        return f"阿里云盘域名解析失败：{host}；请检查 fnOS 的 DNS 或网关设置"
+    return f"阿里云盘连接失败：{host}（{type(exc).__name__}）"
+
+
+def _response_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("code") or payload.get("message") or "")
+
+
+def _refresh_token_rejected(response: httpx.Response) -> bool:
+    if response.status_code not in (400, 401):
+        return False
+    detail = _response_detail(response).lower().replace("_", "").replace(".", "")
+    return "refreshtoken" in detail or "tokeninvalid" in detail
 
 
 class AlipanPanClient:
@@ -65,9 +119,14 @@ class AlipanPanClient:
         self._drive_id = ""
         self._username = ""
         self._logged_in = False
+        self._total = 0
+        self._used = 0
         self._client: httpx.AsyncClient | None = None
         self._file_cache: dict[str, dict[str, Any]] = {}
         self._thumbnail_urls: dict[str, str] = {}
+        self._verify_lock = asyncio.Lock()
+        self._last_verify_failure: dict[str, Any] | None = None
+        self._last_verify_failure_at = 0.0
 
     def _update_refresh_token(self, token: Any) -> None:
         if not isinstance(token, str) or not token or token == self.refresh_token:
@@ -105,10 +164,70 @@ class AlipanPanClient:
             await self._client.aclose()
             self._client = None
 
+    async def _exchange_refresh_token(
+        self,
+        urls: tuple[str, ...],
+        body: dict[str, str],
+        label: str,
+    ) -> str:
+        failures: list[str] = []
+        dns_hosts: list[str] = []
+        client = self._get_client()
+        for url in urls:
+            try:
+                response = await client.post(url, json=body)
+            except httpx.HTTPError as exc:
+                message = _network_error(exc, url)
+                failures.append(message)
+                if _is_dns_error(exc):
+                    dns_hosts.append(_host(url))
+                continue
+            if response.status_code in (200, 201):
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                nested = (
+                    data.get("data")
+                    if isinstance(data, dict) and isinstance(data.get("data"), dict)
+                    else {}
+                )
+                access_token = (
+                    data.get("access_token") if isinstance(data, dict) else None
+                ) or nested.get("access_token")
+                if isinstance(access_token, str) and access_token:
+                    new_token = (
+                        data.get("refresh_token") if isinstance(data, dict) else None
+                    ) or nested.get("refresh_token")
+                    self._update_refresh_token(new_token)
+                    if failures:
+                        LOGGER.info(
+                            "阿里云盘 token 刷新端点自动回退成功 host=%s",
+                            _host(url),
+                        )
+                    return access_token
+                failures.append(f"{label} token 返回格式异常：{_host(url)}")
+                continue
+            if _refresh_token_rejected(response):
+                raise RuntimeError("阿里云盘 refresh_token 已失效，请重新扫码登录")
+            detail = _response_detail(response)
+            suffix = f"（{detail}）" if detail else ""
+            failures.append(
+                f"{label} token 刷新失败：{_host(url)} HTTP {response.status_code}{suffix}"
+            )
+
+        if failures and len(dns_hosts) == len(failures):
+            hosts = "、".join(dict.fromkeys(dns_hosts))
+            raise RuntimeError(
+                f"阿里云盘域名解析失败：{hosts}；请检查 fnOS 的 DNS 或网关设置"
+            )
+        if failures:
+            raise RuntimeError(failures[-1])
+        raise RuntimeError(f"{label} token 刷新失败")
+
     async def _refresh_access_token(self) -> str:
         if not self.refresh_token:
             raise RuntimeError("缺少 refresh_token")
-        client = self._get_client()
 
         if self.auth_mode == "openapi":
             if not self.client_id:
@@ -120,46 +239,20 @@ class AlipanPanClient:
             }
             if self.client_secret:
                 body["client_secret"] = self.client_secret
-            last_status = 0
-            for url in OPENAPI_REFRESH_URLS:
-                r = await client.post(url, json=body)
-                last_status = r.status_code
-                if r.status_code not in (200, 201):
-                    continue
-                data = r.json()
-                access_token = data.get("access_token") if isinstance(data, dict) else None
-                if isinstance(access_token, str) and access_token:
-                    new_token = data.get("refresh_token")
-                    self._update_refresh_token(new_token)
-                    return access_token
-            raise RuntimeError(f"OpenAPI token 刷新失败：HTTP {last_status}")
+            return await self._exchange_refresh_token(
+                OPENAPI_REFRESH_URLS,
+                body,
+                "OpenAPI",
+            )
 
-        r = await client.post(
-            WEBSV_REFRESH,
-            json={"refresh_token": self.refresh_token},
-            headers=REFRESH_HEADERS,
+        return await self._exchange_refresh_token(
+            PRIVATE_REFRESH_URLS,
+            {
+                "refresh_token": self.refresh_token,
+                "grant_type": "refresh_token",
+            },
+            "网页登录",
         )
-        if r.status_code == 200:
-            data = r.json()
-            nested = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else {}
-            access_token = data.get("access_token") or nested.get("access_token")
-            if isinstance(access_token, str) and access_token:
-                new_token = data.get("refresh_token") or nested.get("refresh_token")
-                self._update_refresh_token(new_token)
-                return access_token
-
-        r = await client.post(
-            ALIPAN_REFRESH,
-            json={"refresh_token": self.refresh_token, "grant_type": "refresh_token"},
-        )
-        if r.status_code == 200:
-            data = r.json()
-            access_token = data.get("access_token") if isinstance(data, dict) else None
-            if isinstance(access_token, str) and access_token:
-                new_token = data.get("refresh_token")
-                self._update_refresh_token(new_token)
-                return access_token
-        raise RuntimeError("无法用 refresh_token 换取 access_token，凭据可能已失效")
 
     def _ensure_access_token(self) -> None:
         if not self._access_token:
@@ -186,7 +279,7 @@ class AlipanPanClient:
                     url, json=body, headers=self._auth_headers()
                 )
             except httpx.HTTPError as exc:
-                raise RuntimeError(f"阿里云盘接口调用失败：{type(exc).__name__}") from exc
+                raise RuntimeError(_network_error(exc, url)) from exc
             if response.status_code in (200, 201):
                 data = response.json()
                 if not isinstance(data, dict):
@@ -205,33 +298,77 @@ class AlipanPanClient:
             raise RuntimeError(f"阿里云盘接口调用失败：HTTP {response.status_code}{suffix}")
         raise RuntimeError("阿里云盘接口调用失败")
 
+    def _verified_state(self) -> dict[str, Any]:
+        return {
+            "success": True,
+            "username": self._username,
+            "drive_id": self._drive_id,
+            "auth_mode": self.auth_mode,
+            "total": self._total,
+            "used": self._used,
+        }
+
+    def _cached_verify_failure(self) -> dict[str, Any] | None:
+        if (
+            self._last_verify_failure
+            and time.monotonic() - self._last_verify_failure_at
+            < VERIFY_FAILURE_COOLDOWN_SECONDS
+        ):
+            return dict(self._last_verify_failure)
+        return None
+
     async def verify_login(self) -> dict[str, Any]:
         if not self.refresh_token and not self._access_token:
             return {"success": False, "error": "缺少阿里云盘 refresh_token"}
-        try:
-            if not self._access_token:
-                self._access_token = await self._refresh_access_token()
-            user = await self._api(self._family, "user", {})
-            drive_id = user.get("default_drive_id") or user.get("default_drive") or user.get("resource_drive_id") or ""
-            if not drive_id:
-                return {"success": False, "error": "阿里云盘未返回可用网盘空间"}
-            self._drive_id = str(drive_id)
-            self._username = str(
-                user.get("user_name") or user.get("nick_name") or user.get("name")
-                or user.get("user_id") or "阿里云盘用户"
-            )
-            self._logged_in = True
-            return {
-                "success": True,
-                "username": self._username,
-                "drive_id": self._drive_id,
-                "auth_mode": self.auth_mode,
-                "total": user.get("total_size", user.get("total_capacity", 0)),
-                "used": user.get("used_size", user.get("use_capacity", 0)),
-            }
-        except Exception as exc:
-            LOGGER.warning("阿里云盘验证登录失败: %s", exc)
-            return {"success": False, "error": str(exc)}
+        if self._logged_in and self._drive_id:
+            return self._verified_state()
+        cached = self._cached_verify_failure()
+        if cached:
+            return cached
+
+        async with self._verify_lock:
+            if self._logged_in and self._drive_id:
+                return self._verified_state()
+            cached = self._cached_verify_failure()
+            if cached:
+                return cached
+            try:
+                if not self._access_token:
+                    self._access_token = await self._refresh_access_token()
+                user = await self._api(self._family, "user", {})
+                drive_id = (
+                    user.get("default_drive_id")
+                    or user.get("default_drive")
+                    or user.get("resource_drive_id")
+                    or ""
+                )
+                if not drive_id:
+                    raise RuntimeError("阿里云盘未返回可用网盘空间")
+                self._drive_id = str(drive_id)
+                self._username = str(
+                    user.get("user_name")
+                    or user.get("nick_name")
+                    or user.get("name")
+                    or user.get("user_id")
+                    or "阿里云盘用户"
+                )
+                self._total = user.get(
+                    "total_size", user.get("total_capacity", 0)
+                )
+                self._used = user.get(
+                    "used_size", user.get("use_capacity", 0)
+                )
+                self._logged_in = True
+                self._last_verify_failure = None
+                self._last_verify_failure_at = 0.0
+                return self._verified_state()
+            except Exception as exc:
+                error = str(exc) or type(exc).__name__
+                failure = {"success": False, "error": error}
+                self._last_verify_failure = failure
+                self._last_verify_failure_at = time.monotonic()
+                LOGGER.warning("阿里云盘验证登录失败: %s", error)
+                return dict(failure)
 
     async def _list_by_parent(self, parent_id: str, page: int, page_size: int) -> dict:
         self._ensure_access_token()
@@ -383,14 +520,10 @@ class AlipanPanClient:
             size = int(data.get("size") or cached.get("size") or 0)
             name = str(data.get("name") or cached.get("name") or file_id)
             if not isinstance(url, str) or not url:
-                if self.auth_mode == "refresh_token" and size >= PRIVATE_WEB_DOWNLOAD_LIMIT:
-                    error = (
-                        "阿里云盘网页接口不支持超过 100 MB 的文件下载；"
-                        "请在设置中切换到 OpenAPI 模式后重新登录。"
-                    )
-                else:
-                    error = "阿里云盘未返回可用下载直链，请刷新凭据后重试"
-                return {"success": False, "error": error}
+                return {
+                    "success": False,
+                    "error": "阿里云盘未返回可用下载直链，请刷新凭据后重试",
+                }
             LOGGER.info(
                 "阿里云盘获取下载链接成功 file_id=%s mode=%s size=%d",
                 file_id,

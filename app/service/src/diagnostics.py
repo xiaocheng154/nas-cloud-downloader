@@ -140,8 +140,9 @@ def _directory_check(path: Path) -> dict[str, Any]:
 
 def _aria2_check() -> dict[str, Any]:
     try:
+        aria2_bin = os.environ.get("ARIA2_BIN", "aria2c")
         result = subprocess.run(
-            ["aria2c", "--version"],
+            [aria2_bin, "--version"],
             capture_output=True,
             text=True,
             timeout=5,

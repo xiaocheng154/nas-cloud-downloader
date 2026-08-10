@@ -200,6 +200,8 @@ class QuarkPanClient:
             "_page": page,
             "_size": page_size,
             "_sort": "file_type:asc,updated_at:desc",
+            "_fetch_total": 1,
+            "_fetch_sub_dirs": 1,
         }
         response = await self._get_client().get(
             f"{DRIVE_API}/file/sort",
@@ -219,12 +221,24 @@ class QuarkPanClient:
     def _file_entry(self, item: dict[str, Any]) -> dict[str, Any]:
         is_dir = bool(item.get("dir")) or item.get("file_type", 0) == 0
         fid = str(item.get("fid", ""))
-        thumbnail_url = str(
-            item.get("thumbnail")
+        thumbnail = (
+            item.get("thumbnail_url")
+            or item.get("thumbnail")
             or item.get("big_thumbnail")
             or item.get("small_thumbnail")
+            or item.get("thumb_url")
             or ""
         )
+        if isinstance(thumbnail, dict):
+            thumbnail = (
+                thumbnail.get("url")
+                or thumbnail.get("src")
+                or thumbnail.get("download_url")
+                or ""
+            )
+        thumbnail_url = str(thumbnail).strip()
+        if thumbnail_url.startswith("//"):
+            thumbnail_url = f"https:{thumbnail_url}"
         if fid and thumbnail_url:
             self._thumbnail_urls[fid] = thumbnail_url
         return {
@@ -538,15 +552,27 @@ class QuarkPanClient:
     async def fetch_thumbnail(self, fid: str) -> dict[str, Any]:
         url = self._thumbnail_urls.get(fid, "")
         if not url:
-            return {"success": False, "error": "缩略图不存在"}
+            return {"success": False, "error": "\u7f29\u7565\u56fe\u4e0d\u5b58\u5728"}
         try:
-            response = await self._get_client().get(url)
-            if response.status_code != 200 or len(response.content) > 8 * 1024 * 1024:
-                return {"success": False, "error": "缩略图读取失败"}
+            response = await self._get_client().get(
+                url,
+                headers={
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                    "Referer": "https://pan.quark.cn/",
+                },
+            )
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+            if (
+                response.status_code != 200
+                or not response.content
+                or len(response.content) > 8 * 1024 * 1024
+                or not content_type.startswith("image/")
+            ):
+                return {"success": False, "error": "\u7f29\u7565\u56fe\u8bfb\u53d6\u5931\u8d25"}
             return {
                 "success": True,
                 "content": response.content,
-                "content_type": response.headers.get("content-type", "image/jpeg"),
+                "content_type": content_type,
             }
         except httpx.HTTPError:
-            return {"success": False, "error": "缩略图读取失败"}
+            return {"success": False, "error": "\u7f29\u7565\u56fe\u8bfb\u53d6\u5931\u8d25"}

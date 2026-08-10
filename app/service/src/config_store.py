@@ -62,7 +62,7 @@ class AppSettings:
     log_level: str = "INFO"
     log_retention_days: int = 7
     log_max_size_mb: int = 10
-    aria2_enabled: bool = False
+    aria2_enabled: bool = True
     aria2_rpc_url: str = "http://127.0.0.1:6800/jsonrpc"
     aria2_secret: str = ""
     baidu_app_id: int = 250528

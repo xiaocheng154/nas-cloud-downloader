@@ -37,13 +37,14 @@ from diagnostics import (
 )
 from alipan import AlipanPanClient
 from alipan_qr import AlipanQrLoginManager
+from cloud_qr import CloudQrLoginManager
 from downloader import DownloadManager
 from local_files import LocalFileManager
 from onboarding import BaiduGuideStore, OnboardingStore
 from quark import QuarkPanClient
 
 
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 STARTED_AT = time.time()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -64,7 +65,14 @@ aria2_client = Aria2Client()
 def _sync_aria2_settings():
     settings = settings_store.load()
     aria2_client.url = settings.aria2_rpc_url or "http://127.0.0.1:6800/jsonrpc"
-    aria2_client.secret = settings.aria2_secret or ""
+    secret = settings.aria2_secret or ""
+    secret_file = Path(os.environ.get("ARIA2_SECRET_FILE", ""))
+    if not secret and secret_file.is_file():
+        try:
+            secret = secret_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            secret = ""
+    aria2_client.secret = secret
 
 
 dl_manager = DownloadManager(
@@ -74,6 +82,7 @@ dl_manager = DownloadManager(
 )
 local_file_manager = LocalFileManager(DOWNLOAD_DIR)
 alipan_qr_manager = AlipanQrLoginManager()
+cloud_qr_manager = CloudQrLoginManager()
 clients_lock = asyncio.Lock()
 
 
@@ -150,6 +159,7 @@ async def lifespan(_: FastAPI):
         await quark_client.close()
         await alipan_client.close()
         await alipan_qr_manager.close()
+        await cloud_qr_manager.close()
         logger.info("多网盘下载器 stopped")
         for handler in list(logger.handlers):
             handler.flush()
@@ -554,6 +564,7 @@ async def aria2_status():
         "configured": aria2_client.is_configured,
         "online": online,
         "url": aria2_client.url,
+        "bundled": bool(os.environ.get("ARIA2_BIN")),
     }
 
 
@@ -779,6 +790,59 @@ async def alipan_qr_cancel(session_id: str):
     return {"success": True}
 
 
+@app.post("/api/{provider}/qr/start")
+async def cloud_qr_start(provider: str):
+    if provider not in {"baidu", "quark"}:
+        raise HTTPException(404, "\u4e0d\u652f\u6301\u7684\u626b\u7801\u767b\u5f55\u7c7b\u578b")
+    try:
+        return await cloud_qr_manager.start(provider)
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.warning("%s QR login start failed: %s", provider, type(exc).__name__)
+        raise HTTPException(502, f"\u751f\u6210\u626b\u7801\u767b\u5f55\u4e8c\u7ef4\u7801\u5931\u8d25\uff1a{exc}") from exc
+
+
+@app.get("/api/{provider}/qr/{session_id}/image")
+async def cloud_qr_image(provider: str, session_id: str):
+    if provider not in {"baidu", "quark"}:
+        raise HTTPException(404, "\u4e0d\u652f\u6301\u7684\u626b\u7801\u767b\u5f55\u7c7b\u578b")
+    try:
+        image, media_type = await cloud_qr_manager.image(provider, session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(
+        content=image,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/api/{provider}/qr/{session_id}/status")
+async def cloud_qr_status(provider: str, session_id: str):
+    if provider not in {"baidu", "quark"}:
+        raise HTTPException(404, "\u4e0d\u652f\u6301\u7684\u626b\u7801\u767b\u5f55\u7c7b\u578b")
+    try:
+        result = await cloud_qr_manager.poll(provider, session_id)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "\u67e5\u8be2\u626b\u7801\u72b6\u6001\u5931\u8d25") from exc
+    credential = str(result.pop("cookie", ""))
+    if result.get("status") != "confirmed" or not credential:
+        return result
+    verified = (
+        await _replace_baidu({"cookie": credential}, persist=True)
+        if provider == "baidu"
+        else await _replace_quark({"cookie": credential}, persist=True)
+    )
+    return {**result, "logged_in": True, "username": verified.get("username", "")}
+
+
+@app.delete("/api/{provider}/qr/{session_id}")
+async def cloud_qr_cancel(provider: str, session_id: str):
+    if provider not in {"baidu", "quark"}:
+        raise HTTPException(404, "\u4e0d\u652f\u6301\u7684\u626b\u7801\u767b\u5f55\u7c7b\u578b")
+    await cloud_qr_manager.cancel(session_id)
+    return {"success": True}
+
+
 @app.get("/api/alipan/list")
 async def alipan_list(
     path: str = Query("/"),
@@ -899,6 +963,9 @@ async def alipan_status():
             alipan_client._username or verification.get("username", "")
         ),
         "configured": configured,
+        "error": "" if (alipan_client._logged_in or verification.get("success")) else str(
+            verification.get("error", "")
+        ),
     }
 
 

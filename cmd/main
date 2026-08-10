@@ -9,6 +9,10 @@ SERVICE_ROOT="${TRIM_APPDEST}/service"
 APP_SCRIPT="${TRIM_APPDEST}/service/src/app.py"
 VENDOR_DIR="${TRIM_APPDEST}/service/vendor"
 CONFIG_DIR="${TRIM_PKGVAR}/config"
+ARIA2_BIN="${TRIM_APPDEST}/runtime/aria2/aria2c"
+ARIA2_PID_FILE="${TRIM_PKGVAR}/aria2.pid"
+ARIA2_SECRET_FILE="${TRIM_PKGVAR}/aria2.secret"
+ARIA2_SESSION_FILE="${TRIM_PKGVAR}/aria2.session"
 
 log_msg() {
     printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"
@@ -27,6 +31,75 @@ status_process() {
         rm -f "$PID_FILE"
     fi
     return 1
+}
+
+status_aria2() {
+    if [ -r "$ARIA2_PID_FILE" ]; then
+        aria2_pid=$(head -n 1 "$ARIA2_PID_FILE" | tr -d '[:space:]')
+        if check_process "$aria2_pid"; then
+            return 0
+        fi
+        rm -f "$ARIA2_PID_FILE"
+    fi
+    return 1
+}
+
+start_aria2() {
+    if status_aria2; then
+        return 0
+    fi
+    if [ ! -x "$ARIA2_BIN" ]; then
+        log_msg "Bundled Aria2 is missing or not executable: $ARIA2_BIN"
+        return 1
+    fi
+    if [ ! -s "$ARIA2_SECRET_FILE" ]; then
+        umask 077
+        od -An -N24 -tx1 /dev/urandom | tr -d ' \n' > "$ARIA2_SECRET_FILE"
+    fi
+    [ -e "$ARIA2_SESSION_FILE" ] || : > "$ARIA2_SESSION_FILE"
+    aria2_secret=$(head -n 1 "$ARIA2_SECRET_FILE" | tr -d '\r\n')
+    "$ARIA2_BIN" \
+        --enable-rpc=true \
+        --rpc-listen-all=false \
+        --rpc-listen-port=6800 \
+        --rpc-secret="$aria2_secret" \
+        --continue=true \
+        --file-allocation=none \
+        --max-concurrent-downloads=50 \
+        --max-connection-per-server=16 \
+        --split=16 \
+        --min-split-size=1M \
+        --input-file="$ARIA2_SESSION_FILE" \
+        --save-session="$ARIA2_SESSION_FILE" \
+        --save-session-interval=30 >> "$LOG_FILE" 2>&1 &
+    aria2_pid=$!
+    printf '%s' "$aria2_pid" > "$ARIA2_PID_FILE"
+    sleep 1
+    if check_process "$aria2_pid"; then
+        return 0
+    fi
+    rm -f "$ARIA2_PID_FILE"
+    log_msg "Bundled Aria2 exited during startup; built-in downloader remains available"
+    return 1
+}
+
+stop_aria2() {
+    if [ ! -r "$ARIA2_PID_FILE" ]; then
+        return 0
+    fi
+    aria2_pid=$(head -n 1 "$ARIA2_PID_FILE" | tr -d '[:space:]')
+    if check_process "$aria2_pid"; then
+        kill -TERM "$aria2_pid" 2>/dev/null
+        aria2_count=0
+        while check_process "$aria2_pid" && [ "$aria2_count" -lt 10 ]; do
+            sleep 1
+            aria2_count=$((aria2_count + 1))
+        done
+        if check_process "$aria2_pid"; then
+            kill -KILL "$aria2_pid" 2>/dev/null
+        fi
+    fi
+    rm -f "$ARIA2_PID_FILE"
 }
 
 start_process() {
@@ -48,6 +121,7 @@ start_process() {
     fi
 
     mkdir -p "$CONFIG_DIR" "$DOWNLOAD_DIR"
+    start_aria2 || true
     log_msg "Starting native service on port 8686"
     env \
         PYTHONHOME="$PYTHON_HOME" \
@@ -55,6 +129,8 @@ start_process() {
         CONFIG_DIR="$CONFIG_DIR" \
         DOWNLOAD_DIR="$DOWNLOAD_DIR" \
         DOWNLOAD_DIR_FILE="$DOWNLOAD_FILE" \
+        ARIA2_SECRET_FILE="$ARIA2_SECRET_FILE" \
+        ARIA2_BIN="$ARIA2_BIN" \
         PORT="8686" \
         "$PYTHON_BIN" "$APP_SCRIPT" >> "$LOG_FILE" 2>&1 &
     pid=$!
@@ -71,12 +147,14 @@ start_process() {
 
 stop_process() {
     if [ ! -r "$PID_FILE" ]; then
+        stop_aria2
         return 0
     fi
 
     pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
     if ! check_process "$pid"; then
         rm -f "$PID_FILE"
+        stop_aria2
         return 0
     fi
 
@@ -91,6 +169,7 @@ stop_process() {
         kill -KILL "$pid" 2>/dev/null
     fi
     rm -f "$PID_FILE"
+    stop_aria2
     return 0
 }
 

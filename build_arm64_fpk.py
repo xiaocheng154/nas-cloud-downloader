@@ -26,6 +26,8 @@ PYDANTIC_CORE_WHEEL = (
     DOWNLOAD_ROOT
     / "pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
 )
+ARIA2_ARCHIVE = DOWNLOAD_ROOT / "aria2-1.36.0-static-linux-arm64.tar.gz"
+ARIA2_SHA256 = "bf33c10b378fddbcf12b01c876449a172ea4368213476ae5b424473402bf9dab"
 
 
 def sha256(path: Path) -> str:
@@ -154,6 +156,23 @@ def install_pydantic_core() -> None:
             destination.write_bytes(wheel.read(item))
 
 
+def install_aria2_runtime() -> None:
+    if not ARIA2_ARCHIVE.is_file():
+        raise FileNotFoundError(ARIA2_ARCHIVE)
+    actual_hash = sha256(ARIA2_ARCHIVE)
+    if actual_hash != ARIA2_SHA256:
+        raise RuntimeError(f"Aria2 archive SHA-256 mismatch: {actual_hash}")
+    destination = STAGING_ROOT / "app" / "runtime" / "aria2" / "aria2c"
+    with tarfile.open(ARIA2_ARCHIVE, "r:gz") as archive:
+        member = archive.getmember("aria2c")
+        source = archive.extractfile(member)
+        if source is None or not member.isfile():
+            raise RuntimeError("ARM64 Aria2 archive does not contain aria2c")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as output:
+            shutil.copyfileobj(source, output)
+
+
 def remove_generated_caches() -> None:
     app_root = (STAGING_ROOT / "app").resolve()
     for cache_dir in app_root.rglob("__pycache__"):
@@ -201,6 +220,7 @@ def audit_elf_tree(root: Path) -> list[Path]:
         raise RuntimeError("No AArch64 ELF files found")
     required = {
         root / "runtime" / "python" / "bin" / "python3",
+        root / "runtime" / "aria2" / "aria2c",
         root
         / "service"
         / "vendor"
@@ -275,6 +295,7 @@ def main() -> None:
     copy_project()
     install_python_runtime()
     install_pydantic_core()
+    install_aria2_runtime()
     remove_generated_caches()
     set_arm_manifest()
     staged_elfs = audit_elf_tree(STAGING_ROOT / "app")

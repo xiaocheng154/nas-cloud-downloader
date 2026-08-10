@@ -146,7 +146,11 @@ class FpkPackageTests(unittest.TestCase):
             "runtime/python/bin/python3",
             "runtime/python/bin/python3.11",
             "runtime/python/lib/libpython3.11.so.1.0",
+            "runtime/aria2/aria2c",
+            "runtime/aria2/LICENSE",
+            "runtime/aria2/SOURCE.txt",
             "service/src/app.py",
+            "service/src/cloud_qr.py",
             "service/src/alipan_qr.py",
             "service/src/local_files.py",
             "service/src/credential_parser.py",
@@ -203,6 +207,10 @@ class FpkPackageTests(unittest.TestCase):
         self.assertIn('case "$1" in', main)
         self.assertIn('${TRIM_APPDEST}/runtime/python/bin/python3', main)
         self.assertIn('${TRIM_APPDEST}/service/src/app.py', main)
+        self.assertIn('${TRIM_APPDEST}/runtime/aria2/aria2c', main)
+        self.assertIn('ARIA2_SECRET_FILE=', main)
+        self.assertIn('start_aria2', main)
+        self.assertIn('stop_aria2', main)
         self.assertIn('PYTHONPATH="$VENDOR_DIR"', main)
         self.assertNotIn("docker", main.lower())
 
@@ -213,6 +221,7 @@ class FpkPackageTests(unittest.TestCase):
         self.assertNotIn("TRIM_DATA_SHARE_PATHS", callback)
         self.assertIn('DOWNLOAD_FILE="${TRIM_PKGVAR}/download_dir"', callback)
         self.assertIn('"$TRIM_APPDEST/runtime/python/bin/python3"', callback)
+        self.assertIn('"$TRIM_APPDEST/runtime/aria2/aria2c"', callback)
         self.assertIn("chmod 755", callback)
         self.assertNotIn("docker", callback.lower())
 
@@ -242,7 +251,7 @@ class FpkPackageTests(unittest.TestCase):
                 key, value = line.split("=", 1)
                 manifest[key.strip()] = value.strip()
         self.assertEqual(manifest["appname"], "clouddl")
-        self.assertEqual(manifest["version"], "1.5.2")
+        self.assertEqual(manifest["version"], "1.5.3")
         self.assertEqual(manifest["display_name"], "多网盘下载器")
         self.assertNotIn("arch", manifest)
         self.assertEqual(manifest["desktop_applaunchname"], "clouddl.Application")
@@ -370,10 +379,10 @@ class FpkPackageTests(unittest.TestCase):
         source_app = (PROJECT_ROOT / "app/service/src/app.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("version = 1.5.2", source_manifest)
+        self.assertIn("version = 1.5.3", source_manifest)
         self.assertIn("platform = x86", source_manifest)
         self.assertNotIn("arch =", source_manifest)
-        self.assertIn('APP_VERSION = "1.5.2"', source_app)
+        self.assertIn('APP_VERSION = "1.5.3"', source_app)
 
 
 if __name__ == "__main__":

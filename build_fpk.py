@@ -70,6 +70,7 @@ def audit_package(package: Path) -> int:
     elf_count = 0
     required = {
         "runtime/python/bin/python3",
+        "runtime/aria2/aria2c",
         "service/vendor/pydantic_core/_pydantic_core.cpython-311-x86_64-linux-gnu.so",
     }
     found = set()

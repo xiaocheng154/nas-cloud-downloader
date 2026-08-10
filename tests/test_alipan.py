@@ -19,6 +19,14 @@ def response(
     return httpx.Response(status_code, text="{}", request=request)
 
 
+def dns_error(url: str) -> httpx.ConnectError:
+    request = httpx.Request("POST", url)
+    return httpx.ConnectError(
+        "[Errno -2] Name or service not known",
+        request=request,
+    )
+
+
 class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_openapi_rename_uses_open_file_update(self) -> None:
         client = AlipanPanClient(
@@ -38,7 +46,7 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         call = client._client.post.await_args
         self.assertEqual(
             str(call.args[0]),
-            "https://open.aliyundrive.com/adrive/v1.0/openFile/update",
+            "https://openapi.alipan.com/adrive/v1.0/openFile/update",
         )
 
     async def test_verify_login_refreshes_token_and_gets_user(self) -> None:
@@ -63,17 +71,90 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.refresh_token, "rt-new")
         self.assertTrue(client._logged_in)
 
-    async def test_verify_login_refresh_failure(self) -> None:
-        client = AlipanPanClient(refresh_token="bad-rt")
+    async def test_private_refresh_falls_back_after_dns_failure(self) -> None:
+        client = AlipanPanClient(refresh_token="rt-123")
         client._client = AsyncMock()
         client._client.post.side_effect = [
-            response(400),
-            response(400),
+            dns_error("https://api.aliyundrive.com/token/refresh"),
+            response(200, json_data={"access_token": "at-abc", "refresh_token": "rt-new"}),
+            response(
+                200,
+                json_data={
+                    "default_drive_id": "drive",
+                    "user_name": "tester",
+                },
+            ),
         ]
 
         result = await client.verify_login()
 
+        self.assertTrue(result["success"])
+        urls = [str(call.args[0]) for call in client._client.post.await_args_list]
+        self.assertEqual(
+            urls[:2],
+            [
+                "https://api.aliyundrive.com/token/refresh",
+                "https://auth.aliyundrive.com/v2/account/token",
+            ],
+        )
+
+    async def test_dns_failure_is_friendly_and_temporarily_cached(self) -> None:
+        client = AlipanPanClient(refresh_token="rt")
+        client._client = AsyncMock()
+        client._client.post.side_effect = [
+            dns_error("https://api.aliyundrive.com/token/refresh"),
+            dns_error("https://auth.aliyundrive.com/v2/account/token"),
+            dns_error("https://auth.alipan.com/v2/account/token"),
+        ]
+
+        first = await client.verify_login()
+        second = await client.verify_login()
+
+        self.assertFalse(first["success"])
+        self.assertEqual(first, second)
+        self.assertIn("域名解析失败", first["error"])
+        self.assertIn("auth.aliyundrive.com", first["error"])
+        self.assertIn("api.aliyundrive.com", first["error"])
+        self.assertNotIn("Errno", first["error"])
+        self.assertEqual(client._client.post.await_count, 3)
+
+    async def test_openapi_verification_uses_drive_info_endpoint(self) -> None:
+        client = AlipanPanClient(
+            refresh_token="rt",
+            client_id="client",
+            auth_mode="openapi",
+        )
+        client._access_token = "at"
+        client._client = AsyncMock()
+        client._client.post.return_value = response(
+            200,
+            json_data={
+                "default_drive_id": "drive",
+                "name": "openapi-user",
+            },
+        )
+
+        result = await client.verify_login()
+
+        self.assertTrue(result["success"])
+        called_url = str(client._client.post.await_args.args[0])
+        self.assertEqual(
+            called_url,
+            "https://openapi.alipan.com/adrive/v1.0/user/getDriveInfo",
+        )
+
+    async def test_verify_login_refresh_failure(self) -> None:
+        client = AlipanPanClient(refresh_token="bad-rt")
+        client._client = AsyncMock()
+        client._client.post.return_value = response(
+            400,
+            json_data={"code": "InvalidParameter.RefreshToken"},
+        )
+
+        result = await client.verify_login()
+
         self.assertFalse(result["success"])
+        self.assertIn("已失效", result["error"])
         self.assertFalse(client._logged_in)
 
     async def test_list_files_uses_v3_list_and_maps_entries(self) -> None:
@@ -172,8 +253,8 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         result = await client.get_download_url("large")
 
         self.assertFalse(result["success"])
-        self.assertIn("100 MB", result["error"])
-        self.assertIn("OpenAPI", result["error"])
+        self.assertNotIn("100 MB", result["error"])
+        self.assertIn("\u672a\u8fd4\u56de\u53ef\u7528\u4e0b\u8f7d\u76f4\u94fe", result["error"])
 
     async def test_openapi_uses_official_endpoint_and_cdn_url(self) -> None:
         client = AlipanPanClient(
@@ -204,7 +285,7 @@ class AlipanClientTests(unittest.IsolatedAsyncioTestCase):
         called_url = str(client._client.post.await_args.args[0])
         self.assertEqual(
             called_url,
-            "https://open.aliyundrive.com/adrive/v1.0/openFile/getDownloadUrl",
+            "https://openapi.alipan.com/adrive/v1.0/openFile/getDownloadUrl",
         )
 
     async def test_api_refreshes_once_after_401(self) -> None:

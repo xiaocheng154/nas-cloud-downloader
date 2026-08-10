@@ -39,9 +39,9 @@ export const api = {
   }),
   clearCredential: (provider) => request(`/api/credentials/${provider}`, {method: "DELETE"}),
   providerStatus: (provider) => request(`/api/${provider}/status`),
-  startAlipanQr: () => request("/api/alipan/qr/start", {method: "POST"}),
-  alipanQrStatus: (sessionId) => request(`/api/alipan/qr/${encodeURIComponent(sessionId)}/status`),
-  cancelAlipanQr: (sessionId) => request(`/api/alipan/qr/${encodeURIComponent(sessionId)}`, {method: "DELETE"}),
+  startQr: (provider) => request(`/api/${provider}/qr/start`, {method: "POST"}),
+  qrStatus: (provider, sessionId) => request(`/api/${provider}/qr/${encodeURIComponent(sessionId)}/status`),
+  cancelQr: (provider, sessionId) => request(`/api/${provider}/qr/${encodeURIComponent(sessionId)}`, {method: "DELETE"}),
   files: (provider, path) => request(query(`/api/${provider}/list`, {path})),
   search: (provider, keyword, path) => request(query(`/api/${provider}/search`, {keyword, path})),
   rename: (provider, payload) => request(`/api/${provider}/rename`, {

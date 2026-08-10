@@ -18,8 +18,9 @@ const state = {
   downloadTimer: null,
   startupFinished: false,
   renameTarget: null,
-  alipanQrSession: "",
-  alipanQrTimer: null,
+  qrProvider: "",
+  qrSession: "",
+  qrTimer: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -243,7 +244,7 @@ async function loadProvider(provider) {
     if (status.logged_in) await loadFiles(provider, state.paths[provider]);
     else {
       const label = provider === "baidu" ? "百度网盘" : provider === "quark" ? "夸克网盘" : "阿里云盘";
-      showProviderEmpty(provider, status.configured ? "凭据已保存，当前登录状态需要重新验证" : `请先在设置中配置${label}凭据`);
+      showProviderEmpty(provider, status.error || (status.configured ? "凭据已保存，当前登录状态需要重新验证" : `请先在设置中配置${label}凭据`));
     }
   } catch (error) {
     showProviderEmpty(provider, error.message);
@@ -726,60 +727,74 @@ async function saveCredential(provider) {
   }
 }
 
-function clearAlipanQrTimer() {
-  if (state.alipanQrTimer) window.clearTimeout(state.alipanQrTimer);
-  state.alipanQrTimer = null;
+function clearQrTimer() {
+  if (state.qrTimer) window.clearTimeout(state.qrTimer);
+  state.qrTimer = null;
 }
 
-async function closeAlipanQrDialog(cancelRemote = true) {
-  clearAlipanQrTimer();
-  const sessionId = state.alipanQrSession;
-  state.alipanQrSession = "";
-  $("#alipan-qr-dialog").classList.add("is-hidden");
-  $("#alipan-qr-image").removeAttribute("src");
-  if (cancelRemote && sessionId) {
-    try { await api.cancelAlipanQr(sessionId); } catch (_) { /* 会话会自动过期 */ }
+async function closeQrDialog(cancelRemote = true) {
+  clearQrTimer();
+  const provider = state.qrProvider;
+  const sessionId = state.qrSession;
+  state.qrProvider = "";
+  state.qrSession = "";
+  $("#cloud-qr-dialog").classList.add("is-hidden");
+  $("#cloud-qr-image").removeAttribute("src");
+  if (cancelRemote && provider && sessionId) {
+    try { await api.cancelQr(provider, sessionId); } catch (_) { /* session expires automatically */ }
   }
 }
 
-async function pollAlipanQr() {
-  const sessionId = state.alipanQrSession;
-  if (!sessionId) return;
+async function pollQr() {
+  const provider = state.qrProvider;
+  const sessionId = state.qrSession;
+  if (!provider || !sessionId) return;
   try {
-    const result = await api.alipanQrStatus(sessionId);
-    if (sessionId !== state.alipanQrSession) return;
-    $("#alipan-qr-status").textContent = result.message || "等待扫码";
+    const result = await api.qrStatus(provider, sessionId);
+    if (provider !== state.qrProvider || sessionId !== state.qrSession) return;
+    $("#cloud-qr-status").textContent = result.message || result.error || "\u7b49\u5f85\u626b\u7801";
     if (result.status === "confirmed") {
-      await closeAlipanQrDialog(false);
+      await closeQrDialog(false);
       await Promise.all([loadSettings(), loadCredentials()]);
       fillSettingsForm();
-      toast(`阿里云盘扫码登录成功${result.username ? `：${result.username}` : ""}`);
-      await loadProvider("alipan");
+      const names = {baidu: "\u767e\u5ea6\u7f51\u76d8", quark: "\u5938\u514b\u7f51\u76d8", alipan: "\u963f\u91cc\u4e91\u76d8"};
+      toast(`${names[provider]}\u626b\u7801\u767b\u5f55\u6210\u529f${result.username ? `\uff1a${result.username}` : ""}`);
+      await loadProvider(provider);
       return;
     }
     if (["expired", "cancelled"].includes(result.status)) {
-      clearAlipanQrTimer();
+      clearQrTimer();
       return;
     }
-    state.alipanQrTimer = window.setTimeout(pollAlipanQr, 2000);
+    state.qrTimer = window.setTimeout(pollQr, 2000);
   } catch (error) {
-    clearAlipanQrTimer();
-    $("#alipan-qr-status").textContent = error.message;
+    clearQrTimer();
+    $("#cloud-qr-status").textContent = error.message;
   }
 }
 
-async function startAlipanQr() {
-  await closeAlipanQrDialog();
-  $("#alipan-qr-dialog").classList.remove("is-hidden");
-  $("#alipan-qr-status").textContent = "正在生成二维码";
+async function startQr(provider = state.qrProvider) {
+  await closeQrDialog();
+  const names = {baidu: "\u767e\u5ea6\u7f51\u76d8", quark: "\u5938\u514b\u7f51\u76d8", alipan: "\u963f\u91cc\u4e91\u76d8"};
+  state.qrProvider = provider;
+  $("#cloud-qr-eyebrow").textContent = `${names[provider]}\u626b\u7801\u767b\u5f55`;
+  $("#cloud-qr-title").textContent = `\u4f7f\u7528${names[provider]} App \u626b\u7801`;
+  $("#cloud-qr-image").alt = `${names[provider]}\u767b\u5f55\u4e8c\u7ef4\u7801`;
+  $("#cloud-qr-help").textContent = provider === "alipan"
+    ? "\u626b\u7801\u540e\u8bf7\u5728\u624b\u673a\u4e2d\u786e\u8ba4\u3002\u672c\u65b9\u5f0f\u5c06\u4f7f\u7528\u7f51\u9875 refresh_token \u517c\u5bb9\u6a21\u5f0f\u3002"
+    : "\u626b\u7801\u540e\u8bf7\u5728\u624b\u673a\u4e2d\u786e\u8ba4\uff0c\u767b\u5f55\u51ed\u636e\u53ea\u4fdd\u5b58\u5728 NAS \u672c\u5730\u3002";
+  $("#cloud-qr-dialog").classList.remove("is-hidden");
+  $("#cloud-qr-status").textContent = "\u6b63\u5728\u751f\u6210\u4e8c\u7ef4\u7801";
   try {
-    const result = await api.startAlipanQr();
-    state.alipanQrSession = result.session_id;
-    $("#alipan-qr-image").src = `/api/alipan/qr/${encodeURIComponent(result.session_id)}.svg`;
-    $("#alipan-qr-status").textContent = "等待扫码";
-    state.alipanQrTimer = window.setTimeout(pollAlipanQr, 1200);
+    const result = await api.startQr(provider);
+    state.qrSession = result.session_id;
+    $("#cloud-qr-image").src = provider === "alipan"
+      ? `/api/alipan/qr/${encodeURIComponent(result.session_id)}.svg`
+      : `/api/${provider}/qr/${encodeURIComponent(result.session_id)}/image`;
+    $("#cloud-qr-status").textContent = "\u7b49\u5f85\u626b\u7801";
+    state.qrTimer = window.setTimeout(pollQr, 1200);
   } catch (error) {
-    $("#alipan-qr-status").textContent = error.message;
+    $("#cloud-qr-status").textContent = error.message;
   }
 }
 
@@ -874,7 +889,7 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !$("#rename-dialog").classList.contains("is-hidden")) closeRenameDialog();
-    if (event.key === "Escape" && !$("#alipan-qr-dialog").classList.contains("is-hidden")) closeAlipanQrDialog();
+    if (event.key === "Escape" && !$("#cloud-qr-dialog").classList.contains("is-hidden")) closeQrDialog();
   });
   $("#clear-downloads").addEventListener("click", async () => { await api.clearDownloads(); await refreshDownloads(); });
   $("#settings-form").addEventListener("submit", saveSettings);
@@ -882,11 +897,13 @@ function bindEvents() {
   $("#save-baidu-credential").addEventListener("click", () => saveCredential("baidu"));
   $("#save-quark-credential").addEventListener("click", () => saveCredential("quark"));
   $("#save-alipan-credential").addEventListener("click", () => saveCredential("alipan"));
-  $("#alipan-qr-login").addEventListener("click", startAlipanQr);
-  $("#alipan-qr-refresh").addEventListener("click", startAlipanQr);
-  $("#alipan-qr-cancel").addEventListener("click", () => closeAlipanQrDialog());
-  $("#alipan-qr-dialog").addEventListener("click", (event) => {
-    if (event.target.id === "alipan-qr-dialog") closeAlipanQrDialog();
+  ["baidu", "quark", "alipan"].forEach((provider) => {
+    $(`#${provider}-qr-login`).addEventListener("click", () => startQr(provider));
+  });
+  $("#cloud-qr-refresh").addEventListener("click", () => startQr());
+  $("#cloud-qr-cancel").addEventListener("click", () => closeQrDialog());
+  $("#cloud-qr-dialog").addEventListener("click", (event) => {
+    if (event.target.id === "cloud-qr-dialog") closeQrDialog();
   });
   [["baidu", "baidu_cookie"], ["quark", "quark_cookie"]].forEach(([provider, name]) => {
     const input = $("#settings-form").elements[name];

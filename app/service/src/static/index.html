@@ -320,6 +320,7 @@
                   </ol>
                 </details>
                 <div class="inline-actions">
+                  <button class="button button-secondary" id="baidu-qr-login" type="button">扫码登录</button>
                   <button class="button button-secondary" id="save-baidu-credential" type="button">验证并保存</button>
                   <button class="button button-text danger" id="clear-baidu-credential" type="button">清除</button>
                 </div>
@@ -338,6 +339,7 @@
                   </ol>
                 </details>
                 <div class="inline-actions">
+                  <button class="button button-secondary" id="quark-qr-login" type="button">扫码登录</button>
                   <button class="button button-secondary" id="save-quark-credential" type="button">验证并保存</button>
                   <button class="button button-text danger" id="clear-quark-credential" type="button">清除</button>
                 </div>
@@ -347,7 +349,7 @@
                 <label class="field">
                   <span>鉴权方式</span>
                   <select name="alipan_auth_mode">
-                    <option value="refresh_token">网页 refresh_token（仅支持不超过 100 MB）</option>
+                    <option value="refresh_token">网页 refresh_token（兼容模式）</option>
                     <option value="openapi">官方 OpenAPI（大文件及高速下载推荐）</option>
                   </select>
                 </label>
@@ -357,7 +359,7 @@
                   <ol>
                     <li>用官方客户端或官方网页登录阿里云盘。</li>
                     <li>从浏览器 Local Storage / 客户端配置中复制 <code>refresh_token</code>。</li>
-                    <li>网页 refresh_token 受官方网页端 100 MB 下载限制；大文件请使用 OpenAPI refresh_token。</li>
+                    <li>直链可用性由阿里云盘服务决定；需要更稳定的大文件下载时建议使用 OpenAPI。</li>
                     <li>refresh_token 属于登录凭据，请勿外泄。</li>
                   </ol>
                 </details>
@@ -443,24 +445,19 @@
                 </div>
               </div>
               <div class="field field-wide section-divider">
-                <span><strong>Aria2 集成（可选）</strong></span>
-                <small>启用后优先使用外部 Aria2 RPC；应用商城没有 Aria2 也不影响内置下载器，保持关闭即可。</small>
+                <span><strong>内置 Aria2 加速</strong></span>
+                <small>安装包已内置 Aria2，无需另行安装或配置；服务异常时自动回退到应用下载器。</small>
               </div>
               <label class="field">
-                <span>启用 Aria2</span>
+                <span>启用内置 Aria2</span>
                 <input name="aria2_enabled" type="checkbox" role="switch">
-                <small>需要 NAS 上已安装 Aria2 并开启 RPC 服务。</small>
+                <small>新安装默认启用，关闭后使用应用自带的 Python 下载引擎。</small>
               </label>
-              <label class="field">
-                <span>RPC 地址</span>
-                <input name="aria2_rpc_url" type="text" placeholder="本机 Aria2 RPC 地址">
-                <small>默认使用本机 127.0.0.1:6800 的 JSON-RPC 端点。</small>
-              </label>
-              <label class="field">
-                <span>RPC 密钥</span>
-                <input name="aria2_secret" type="password" autocomplete="new-password" placeholder="留空表示不修改">
-                <small>密钥只写入配置目录，页面和接口不会回显。</small>
-              </label>
+              <details class="credential-help field-wide">
+                <summary>外部 Aria2 高级设置</summary>
+                <label class="field"><span>RPC 地址</span><input name="aria2_rpc_url" type="text" placeholder="本机 Aria2 RPC 地址"><small>一般无需修改，仅允许连接本机地址。</small></label>
+                <label class="field"><span>RPC 密钥</span><input name="aria2_secret" type="password" autocomplete="new-password" placeholder="留空使用内置自动密钥"><small>内置服务会自动生成密钥，页面和接口不会回显。</small></label>
+              </details>
               <label class="field">
                 <span>百度 app_id</span>
                 <input name="baidu_app_id" type="number" min="1" max="999999" value="250528">
@@ -516,18 +513,16 @@
     </form>
   </div>
 
-  <div class="qr-backdrop is-hidden" id="alipan-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="alipan-qr-title">
+  <div class="qr-backdrop is-hidden" id="cloud-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-qr-title">
     <section class="qr-card">
-      <p class="eyebrow">阿里云盘网页登录</p>
-      <h2 id="alipan-qr-title">使用阿里云盘 App 扫码</h2>
-      <div class="qr-image-frame">
-        <img id="alipan-qr-image" alt="阿里云盘登录二维码">
-      </div>
-      <strong class="qr-status" id="alipan-qr-status">正在生成二维码</strong>
-      <p>扫码后请在手机中确认。本方式将切换到网页 refresh_token 模式，网页接口仅支持不超过 100 MB 的文件下载。</p>
+      <p class="eyebrow" id="cloud-qr-eyebrow">网盘扫码登录</p>
+      <h2 id="cloud-qr-title">使用网盘 App 扫码</h2>
+      <div class="qr-image-frame"><img id="cloud-qr-image" alt="网盘登录二维码"></div>
+      <strong class="qr-status" id="cloud-qr-status">正在生成二维码</strong>
+      <p id="cloud-qr-help">扫码后请在手机中确认，登录凭据只保存在 NAS 本地。</p>
       <div class="qr-actions">
-        <button class="button button-ghost" id="alipan-qr-cancel" type="button">取消</button>
-        <button class="button button-secondary" id="alipan-qr-refresh" type="button">重新生成</button>
+        <button class="button button-ghost" id="cloud-qr-cancel" type="button">取消</button>
+        <button class="button button-secondary" id="cloud-qr-refresh" type="button">重新生成</button>
       </div>
     </section>
   </div>

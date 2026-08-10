@@ -1,0 +1,5 @@
+﻿Aria2 1.36.0
+License: GNU General Public License version 2 or later
+Upstream source: https://github.com/aria2/aria2/tree/release-1.36.0
+Bundled static build: https://github.com/P3TERX/Aria2-Pro-Core/releases/tag/1.36.0_2021.08.22
+Architectures: Linux x86_64 and Linux AArch64

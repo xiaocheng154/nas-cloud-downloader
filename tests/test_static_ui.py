@@ -71,15 +71,18 @@ class StaticUiTests(unittest.TestCase):
         self.assertNotIn("▰", script)
         self.assertNotIn("▧", script)
 
-    def test_alipan_qr_login_is_integrated(self) -> None:
+    def test_all_cloud_qr_logins_are_integrated(self) -> None:
         html = self.read("index.html")
         script = self.read("app.js")
         api = self.read("api.js")
-        self.assertIn('id="alipan-qr-login"', html)
-        self.assertIn('id="alipan-qr-dialog"', html)
-        self.assertIn("startAlipanQr", script)
-        self.assertIn("pollAlipanQr", script)
-        self.assertIn("/api/alipan/qr/start", api)
+        for provider in ("baidu", "quark", "alipan"):
+            self.assertIn(f'id="{provider}-qr-login"', html)
+        self.assertIn('id="cloud-qr-dialog"', html)
+        self.assertIn("startQr", script)
+        self.assertIn("pollQr", script)
+        self.assertIn("status.error ||", script)
+        self.assertIn("/qr/start", api)
+        self.assertIn("/status", api)
 
     def test_download_cards_expose_resume_and_url_refresh_diagnostics(self) -> None:
         script = self.read("app.js")
@@ -124,8 +127,8 @@ class StaticUiTests(unittest.TestCase):
             "仅在指定时段下载",
             "下载并发数",
             "日志与诊断",
-            "Aria2 集成",
-            "启用 Aria2",
+            "\u5185\u7f6e Aria2 \u52a0\u901f",
+            "\u542f\u7528\u5185\u7f6e Aria2",
             "RPC 地址",
             "RPC 密钥",
             "百度 app_id",
@@ -307,7 +310,7 @@ class StaticUiTests(unittest.TestCase):
     def test_speed_limit_and_optional_aria2_are_explained(self) -> None:
         html = self.read("index.html")
         self.assertIn("0.1 MB/s 约等于 102 KB/s", html)
-        self.assertIn("应用商城没有 Aria2 也不影响内置下载器", html)
+        self.assertIn("\u5b89\u88c5\u5305\u5df2\u5185\u7f6e Aria2", html)
 
     def test_logo_is_flat_theme_aware_svg(self) -> None:
         logo = self.read("assets/logo.svg")
