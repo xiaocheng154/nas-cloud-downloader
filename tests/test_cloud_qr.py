@@ -85,6 +85,20 @@ class CloudQrLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("__uid=user", result["cookie"])
         self.assertNotIn(started["session_id"], manager._sessions)
 
+    async def test_baidu_poll_timeout_remains_waiting(self) -> None:
+        manager = CloudQrLoginManager()
+        client = AsyncMock()
+        client.get.side_effect = httpx.ReadTimeout(
+            "long poll", request=httpx.Request("GET", "https://passport.baidu.com")
+        )
+        started = await manager._store({
+            "provider": "baidu", "token": "channel", "client": client,
+            "image": b"png", "media_type": "image/png",
+        })
+        result = await manager.poll("baidu", started["session_id"])
+        self.assertEqual(result["status"], "waiting")
+        await manager.cancel(started["session_id"])
+
     async def test_baidu_waiting_status_has_no_credentials(self) -> None:
         manager = CloudQrLoginManager()
         client = AsyncMock()

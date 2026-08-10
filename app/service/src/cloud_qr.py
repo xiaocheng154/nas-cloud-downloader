@@ -214,14 +214,19 @@ class CloudQrLoginManager:
     async def _poll_baidu(self, session_id: str, session: dict[str, Any]) -> dict[str, Any]:
         client = session["client"]
         now = str(int(time.time() * 1000))
-        response = await client.get(
-            BAIDU_STATUS_URL,
-            params={
-                "channel_id": session["token"], "tpl": "netdisk", "apiver": "v3",
-                "tt": now, "_": now, "callback": f"bd__cbs__{now}",
-            },
-            headers={"Referer": "https://pan.baidu.com/"},
-        )
+        try:
+            response = await client.get(
+                BAIDU_STATUS_URL,
+                params={
+                    "channel_id": session["token"], "tpl": "netdisk", "apiver": "v3",
+                    "tt": now, "_": now, "callback": f"bd__cbs__{now}",
+                },
+                headers={"Referer": "https://pan.baidu.com/"},
+            )
+        except httpx.ReadTimeout:
+            # Baidu intentionally keeps this request open while the QR code has
+            # not been scanned. Treat a long-poll timeout as a waiting state.
+            return {"success": True, "status": "waiting", "message": "等待扫码"}
         response.raise_for_status()
         payload = _json_or_jsonp(response)
         errno = payload.get("errno")

@@ -822,8 +822,11 @@ async def cloud_qr_status(provider: str, session_id: str):
         raise HTTPException(404, "\u4e0d\u652f\u6301\u7684\u626b\u7801\u767b\u5f55\u7c7b\u578b")
     try:
         result = await cloud_qr_manager.poll(provider, session_id)
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, "\u67e5\u8be2\u626b\u7801\u72b6\u6001\u5931\u8d25") from exc
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.warning("%s QR login poll failed: %s: %s", provider, type(exc).__name__, exc)
+        raise HTTPException(502, f"查询扫码状态失败：{exc}") from exc
     credential = str(result.pop("cookie", ""))
     if result.get("status") != "confirmed" or not credential:
         return result
